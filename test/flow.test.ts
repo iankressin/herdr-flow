@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { attachAgent, begin, commandResult, complete, createRun, fail, retry } from "../src/engine.ts";
+import { attachAgent, begin, commandResult, complete, createRun, fail, isInside, retry } from "../src/engine.ts";
 import type { Run } from "../src/engine.ts";
 import { fixFailingTest } from "../src/example.ts";
 import { layoutGraph } from "../src/layout.ts";
@@ -281,4 +281,15 @@ test("every example node's source line sets that node's id", () => {
 
 test("fillTemplate fills known keys and leaves unknown ones", () => {
   assert.equal(fillTemplate("run {{ a }} then {{b}}", { a: "x" }), "run x then {{b}}");
+});
+
+test("isInside refuses a run folder that holds Flow's data folder", () => {
+  const flow = "/Users/x/.config/herdr-app/data/flow";
+  assert.equal(isInside(flow, "/Users/x"), true, "the home folder");
+  assert.equal(isInside(flow, "/Users/x/"), true, "the home folder with a slash");
+  assert.equal(isInside(flow, "/"), true, "the root");
+  assert.equal(isInside(flow, flow), true, "the data folder itself");
+  assert.equal(isInside(flow, "/Users/x/Projects/app"), false, "a project folder");
+  assert.equal(isInside(flow, "/Users/x/.config/herdr-app-other"), false, "a folder that only shares a prefix");
+  assert.equal(isInside(flow, "/Users/x/.config/herdr-app/data/flow-old"), false, "a sibling with a longer name");
 });

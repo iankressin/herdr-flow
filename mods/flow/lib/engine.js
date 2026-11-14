@@ -29,6 +29,14 @@ function arrive(run, target) {
         status: { kind: "finished", end: end.id, result: end.result, note: `max retries exceeded at ${node.label}`, exhausted: node.id },
     };
 }
+/**
+ * Whether `path` is `folder` or sits under it; pass both through realpath first. Flow refuses a run
+ * folder that holds its own data folder, since agents can write where they work.
+ */
+export function isInside(path, folder) {
+    const base = folder.replace(/\/+$/, "");
+    return path === base || path.startsWith(`${base}/`);
+}
 export function createRun(machine, init) {
     const run = {
         id: init.id,

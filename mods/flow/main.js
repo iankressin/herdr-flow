@@ -28,6 +28,7 @@ import {
   createRun,
   fail,
   isExecuting,
+  isInside,
   pendingEffect,
   retry,
   setAuto,
@@ -66,6 +67,22 @@ async function readRun(id) {
   const run = parseRun(JSON.parse(text));
   if (run.id !== id) throw new Error(`run.json in ${id} names run ${run.id}`);
   return { run, text };
+}
+
+async function realpath(path) {
+  const resolved = await exec("realpath", [path]);
+  if (resolved.code !== 0) throw new Error(`Flow can't find ${path}: ${resolved.stderr.trim()}`);
+  return resolved.stdout.trim();
+}
+
+/** Why a run may not work in `folder`, or null. Agents can write where they work. */
+async function folderProblem(folder) {
+  try {
+    if (!isInside(await realpath(flowDir()), await realpath(folder))) return null;
+  } catch (error) {
+    return message(error);
+  }
+  return `Flow can't run in ${folder}: agents working there could edit Flow's own files. Start it from a project folder.`;
 }
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const message = (error) => String(error?.message ?? error);
@@ -177,6 +194,7 @@ export default class Flow extends View {
     this.starting = false;
     this.queue = Promise.resolve();
     this.waiters = [];
+    this.startError = null;
     this.resultError = null;
     this.selected = fixFailingTest.start;
     this.follow = true;
@@ -329,6 +347,11 @@ export default class Flow extends View {
         while (this.run && this.owner && (first || this.run.auto)) {
           first = false;
           const id = this.run.id;
+          const problem = await folderProblem(this.run.folder);
+          if (problem) {
+            await this.update(cx, (run) => (run.id === id ? fail(run, problem) : run));
+            break;
+          }
           let effect = { kind: "none" };
           if (this.run.status.kind === "idle") {
             const begun = await this.update(cx, (run) => {
@@ -514,17 +537,21 @@ export default class Flow extends View {
     }
     if (this.starting) return;
     this.starting = true;
+    this.startError = null;
     cx.spawn(async (cx) => {
       try {
-        const now = Date.now();
-        const space = { id: where.space.id, name: where.space.name };
-        const run = createRun(machine, { id: newRunId(machine, now), space, folder: where.folder, inputs, now });
-        const text = json(run);
-        await exec("mkdir", ["-p", runDir(run.id)]);
-        await writeTextFile(runFile(run.id), text, null);
-        await replaceFile(stateFile(), json({ current: run.id }));
-        this.adopt(run, text);
-        this.note = "";
+        this.startError = await folderProblem(where.folder);
+        if (!this.startError) {
+          const now = Date.now();
+          const space = { id: where.space.id, name: where.space.name };
+          const run = createRun(machine, { id: newRunId(machine, now), space, folder: where.folder, inputs, now });
+          const text = json(run);
+          await exec("mkdir", ["-p", runDir(run.id)]);
+          await writeTextFile(runFile(run.id), text, null);
+          await replaceFile(stateFile(), json({ current: run.id }));
+          this.adopt(run, text);
+          this.note = "";
+        }
       } catch (error) {
         this.note = message(error);
       }
@@ -755,7 +782,7 @@ export default class Flow extends View {
           }),
         ),
       )
-      .when(Boolean(where.error), (el) => el.child(div().text_size(11).text_color(RED).child(where.error)));
+      .when(Boolean(where.error ?? this.startError), (el) => el.child(div().text_size(11).text_color(RED).child(where.error ?? this.startError)));
   }
 
   actions(t, run, live) {

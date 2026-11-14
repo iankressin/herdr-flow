@@ -105,6 +105,15 @@ function arrive(run: Run, target: string): Run {
   };
 }
 
+/**
+ * Whether `path` is `folder` or sits under it; pass both through realpath first. Flow refuses a run
+ * folder that holds its own data folder, since agents can write where they work.
+ */
+export function isInside(path: string, folder: string): boolean {
+  const base = folder.replace(/\/+$/, "");
+  return path === base || path.startsWith(`${base}/`);
+}
+
 export function createRun(machine: Machine, init: NewRun): Run {
   const run: Run = {
     id: init.id,
