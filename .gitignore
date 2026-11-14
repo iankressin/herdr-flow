@@ -1,2 +1,4 @@
 node_modules/
 *.log
+mods/flow/gpui-kit.d.ts
+mods/flow/jsconfig.json

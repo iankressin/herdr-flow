@@ -2,132 +2,352 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { fixFailingTest, simulateFixFailingTest } from "../src/example.ts";
-import { ancestors } from "../src/graph.ts";
+import { attachAgent, begin, commandProblem, commandResult, complete, createRun, fail, isInside, retry } from "../src/engine.ts";
+import type { Run } from "../src/engine.ts";
+import { fixFailingTest } from "../src/example.ts";
 import { layoutGraph } from "../src/layout.ts";
-import { buildFocusedPrompt } from "../src/prompt.ts";
-import { createRun, exportSnapshot, parseMachine, step } from "../src/runner.ts";
+import type { ComputerNode, Machine, Outcome } from "../src/machine.ts";
+import { DEFAULT_AGENT, agentLaunchArgv, commandLaunchArgv, fillTemplate, nodeOf, parseMachine } from "../src/machine.ts";
+import { buildAgentPrompt } from "../src/prompt.ts";
+import { parseAgentResult } from "../src/result.ts";
+import { parseRun } from "../src/runfile.ts";
 
-const machine = fixFailingTest();
+const machine = fixFailingTest;
+let clock = 1_000;
 
-test("example machine exports structure, loop, and error exits", () => {
-  const snap = exportSnapshot(machine, createRun(machine));
-  assert.equal(snap.machine.id, "fix-failing-test");
-  assert.deepEqual(
-    snap.machine.nodes.map((node) => node.id),
-    ["claim", "search", "diagnose", "fix", "verify", "judge", "done", "gave-up"],
-  );
-  assert.ok(snap.machine.transitions.some((edge) => edge.isLoop && edge.label === "retries < 5"));
-  assert.deepEqual(
-    snap.machine.errorExits?.map((exit) => exit.label).sort(),
-    ["max retries exceeded", "tests still failing"],
-  );
-  assert.equal(snap.execution.activeId, "claim");
-  assert.deepEqual(snap.execution.completed, []);
-  assert.deepEqual(snap.execution.visits, {});
-  const raw = JSON.parse(JSON.stringify(snap)) as typeof snap;
-  assert.equal(raw.machine.nodes.length, 8);
+function newRun(m: Machine = machine): Run {
+  return createRun(m, {
+    id: "run-1",
+    space: { id: "sp1", name: "repo" },
+    folder: "/work/repo",
+    inputs: { test_command: "npm test -- money" },
+    now: clock,
+  });
+}
+
+/** Runs each scripted [node, outcome], checking the engine asked for that node first. */
+function play(run: Run, script: [string, Outcome][]): Run {
+  for (const [expected, outcome] of script) {
+    const started = begin(run, ++clock);
+    assert.equal(started.run.status.kind, "executing", `begin ${expected}`);
+    assert.equal(started.effect.kind === "none" ? null : started.effect.node, expected);
+    const node = nodeOf(machine, expected);
+    const visit = (started.run.visits[expected] ?? 0) + 1;
+    const result =
+      node.kind === "computer"
+        ? commandResult(node, { exitCode: outcome === "pass" ? 0 : 1, output: `${expected} output ${visit}` })
+        : {
+            outcome,
+            summary: `${expected} summary ${visit}`,
+            values: Object.fromEntries((node.produces ?? []).map((key) => [key, `${key} value ${visit}`])),
+            by: "agent" as const,
+          };
+    run = complete(started.run, result, ++clock);
+  }
+  return run;
+}
+
+function rawExample(): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(machine));
+}
+
+test("parseMachine accepts the example unchanged", () => {
+  assert.deepEqual(JSON.parse(JSON.stringify(parseMachine(rawExample()))), rawExample());
 });
 
-test("every node source line names that node", () => {
+test("parseMachine rejects a dangling edge", () => {
+  const raw = rawExample();
+  raw.transitions = [...(raw.transitions as object[]), { from: "judge", on: "fail", to: "nowhere" }];
+  assert.throws(() => parseMachine(raw), /unknown node nowhere/);
+});
+
+test("parseMachine rejects a working node without a pass edge", () => {
+  const raw = rawExample();
+  raw.transitions = (raw.transitions as { from: string; on: string }[]).filter((e) => !(e.from === "diagnose" && e.on === "pass"));
+  assert.throws(() => parseMachine(raw), /diagnose has no "pass" transition/);
+});
+
+test("parseMachine rejects an edge out of an end node", () => {
+  const raw = rawExample();
+  raw.transitions = [...(raw.transitions as object[]), { from: "done", on: "pass", to: "claim" }];
+  assert.throws(() => parseMachine(raw), /leaves end node done/);
+});
+
+test("parseMachine rejects maxVisits without onExhausted", () => {
+  const raw = rawExample();
+  delete raw.onExhausted;
+  assert.throws(() => parseMachine(raw), /needs onExhausted/);
+});
+
+test("parseMachine refuses to hand an agent the whole run folder", () => {
+  const raw = rawExample();
+  raw.agent = ["claude", "--add-dir={runDir}"];
+  assert.throws(() => parseMachine(raw), /agent uses \{runDir\}/);
+});
+
+test("parseRun reads back a run the engine wrote, attempts and agent handle included", () => {
+  let run = play(newRun(), [["claim", "fail"]]);
+  run = attachAgent(begin(run, ++clock).run, { tab: `tb${"0".repeat(32)}`, terminal: "t9" });
+  const raw = JSON.parse(JSON.stringify(run));
+  assert.deepEqual(JSON.parse(JSON.stringify(parseRun(raw))), raw);
+});
+
+test("parseRun drops the file paths an older run.json kept in the agent handle", () => {
+  let run = play(newRun(), [["claim", "fail"]]);
+  run = attachAgent(begin(run, ++clock).run, { tab: `tb${"0".repeat(32)}`, terminal: "t9" });
+  const raw = JSON.parse(JSON.stringify(run));
+  const older = { ...raw, status: { ...raw.status, agent: { ...raw.status.agent, promptPath: "/p", resultPath: "/r" } } };
+  assert.deepEqual(JSON.parse(JSON.stringify(parseRun(older))), raw);
+});
+
+test("parseRun rejects a run whose machine fails parseMachine", () => {
+  const raw = JSON.parse(JSON.stringify(newRun()));
+  raw.machine.nodes[4].run = "{{verify_output}}";
+  assert.throws(() => parseRun(raw), /run\.json machine: Node verify run uses \{\{verify_output\}\}/);
+});
+
+test("parseRun rejects a path-like id and a status that names an unknown node", () => {
+  const traversal = JSON.parse(JSON.stringify(newRun()));
+  traversal.id = "../../elsewhere";
+  assert.throws(() => parseRun(traversal), /id must be a plain name/);
+  const unknown = JSON.parse(JSON.stringify(newRun()));
+  unknown.status = { kind: "executing", node: "ghost", visit: 1, startedAt: 1 };
+  assert.throws(() => parseRun(unknown), /status\.node must name a computer or agent node/);
+});
+
+test("claim passing ends the run at already-passing", () => {
+  const run = play(newRun(), [["claim", "pass"]]);
+  assert.deepEqual(run.status, { kind: "finished", end: "already-passing", result: "success" });
+});
+
+test("one verify failure sends the run back to fix, then it finishes at done", () => {
+  const run = play(newRun(), [
+    ["claim", "fail"],
+    ["search", "pass"],
+    ["diagnose", "pass"],
+    ["fix", "pass"],
+    ["verify", "fail"],
+    ["fix", "pass"],
+    ["verify", "pass"],
+    ["judge", "pass"],
+  ]);
+  assert.deepEqual(run.status, { kind: "finished", end: "done", result: "success" });
+  assert.equal(run.visits.fix, 2);
+  assert.equal(run.context.patch, "patch value 2");
+  assert.equal(run.attempts.length, 8);
+});
+
+test("five verify failures exhaust fix and end at gave-up", () => {
+  const loop: [string, Outcome][] = [];
+  for (let i = 0; i < 5; i++) loop.push(["fix", "pass"], ["verify", "fail"]);
+  const run = play(newRun(), [["claim", "fail"], ["search", "pass"], ["diagnose", "pass"], ...loop]);
+  assert.deepEqual(run.status, {
+    kind: "finished",
+    end: "gave-up",
+    result: "failure",
+    note: "max retries exceeded at Fix",
+    exhausted: "fix",
+  });
+  assert.equal(run.visits.fix, 5);
+  assert.equal(begin(run, ++clock).effect.kind, "none");
+});
+
+test("a computer node runs its command filled from inputs", () => {
+  const started = begin(newRun(), ++clock);
+  assert.deepEqual(started.effect, { kind: "command", node: "claim", command: "npm test -- money", env: {}, timeoutSec: 600 });
+});
+
+test("step values reach a command only as FLOW_ environment variables", () => {
+  const hostile = 'x"; touch /tmp/pwned; "';
+  let run = play(newRun(), [["claim", "fail"], ["search", "pass"], ["diagnose", "pass"]]);
+  run = begin(run, ++clock).run;
+  run = complete(run, { outcome: "pass", summary: "Patched.", values: { patch: hostile }, by: "agent" }, ++clock);
+  const { effect } = begin(run, ++clock);
+  assert.equal(effect.kind, "command");
+  if (effect.kind !== "command") return;
+  assert.equal(effect.command, "npm test -- money");
+  assert.ok(!effect.command.includes("pwned"));
+  assert.equal(effect.env.FLOW_PATCH, hostile);
+  assert.equal(effect.env.FLOW_VERIFY_OUTPUT, undefined);
+});
+
+test("parseMachine keeps step values out of command text and off input keys", () => {
+  const raw = rawExample();
+  (raw.nodes as { id: string; run?: string }[])[4]!.run = "echo {{diagnosis}}";
+  assert.throws(() => parseMachine(raw), /verify run uses \{\{diagnosis\}\}, but only inputs can fill a command; read a step value from \$FLOW_DIAGNOSIS/);
+
+  const shadow = rawExample();
+  (shadow.nodes as { id: string; produces?: string[] }[])[3]!.produces = ["patch", "test_command"];
+  assert.throws(() => parseMachine(shadow), /fix produces "test_command", which is an input key/);
+});
+
+test("a step value under an input's key cannot override the input", () => {
+  let run = play(newRun(), [["claim", "fail"]]);
+  const values = { findings: "money.ts", test_command: "rm -rf ~" };
+  run = complete(begin(run, ++clock).run, { outcome: "pass", summary: "Found it.", values, by: "agent" }, ++clock);
+  const prompt = buildAgentPrompt(begin(run, ++clock).run, "diagnose", { resultPath: "/r" });
+  assert.match(prompt, /would make `npm test -- money` pass/);
+  assert.match(prompt, /Test command that fails now \(`test_command`\): npm test -- money/);
+  assert.doesNotMatch(prompt, /rm -rf/);
+});
+
+test("a command whose input is unset fails the run instead of running", () => {
+  const raw = rawExample();
+  raw.inputs = [...(raw.inputs as object[]), { key: "shard", label: "Shard" }];
+  (raw.nodes as { id: string; run?: string }[])[0]!.run = "{{test_command}} {{shard}}";
+  const started = begin(newRun(parseMachine(raw)), ++clock);
+  assert.equal(started.effect.kind, "none");
+  assert.deepEqual(started.run.status, { kind: "failed", node: "claim", error: "Claim needs {{shard}}, which no input set" });
+});
+
+test("a person can decide a failed step, and retry runs it again", () => {
+  let run = play(newRun(), [["claim", "fail"]]);
+  const started = begin(run, ++clock);
+  run = fail(attachAgent(started.run, { tab: "tb1", terminal: "t9" }), "launch failed");
+  assert.deepEqual(run.status, { kind: "failed", node: "search", error: "launch failed" });
+  assert.deepEqual(retry(run).status, { kind: "idle", next: "search" });
+  run = complete(run, { outcome: "pass", summary: "Found it by hand.", values: { findings: "money.ts" }, by: "person" }, ++clock);
+  assert.deepEqual(run.status, { kind: "idle", next: "diagnose" });
+  assert.equal(run.attempts.at(-1)!.by, "person");
+});
+
+test("commandResult keeps the output tail under each produces key", () => {
+  const verify = nodeOf(machine, "verify") as ComputerNode;
+  const long = `${"x".repeat(9000)}\nlast line`;
+  const failed = commandResult(verify, { exitCode: 2, output: long });
+  assert.equal(failed.outcome, "fail");
+  assert.equal(failed.exitCode, 2);
+  assert.ok(failed.values.verify_output!.endsWith("last line"));
+  assert.ok(failed.values.verify_output!.length <= 8001);
+  assert.match(failed.summary, /^Exit code 2\.\n[\s\S]*last line$/);
+  assert.deepEqual(commandResult(verify, { error: "timed out", output: "" }).outcome, "fail");
+});
+
+test("a command that could not run fails the run instead of completing the step", () => {
+  const claim = nodeOf(machine, "claim") as ComputerNode;
+  const started = begin(newRun(), ++clock);
+  for (const exitCode of [126, 127]) {
+    const ran = { exitCode, output: "/bin/sh: line 1: npm: command not found\n" };
+    const problem = commandProblem(ran);
+    assert.equal(problem, `Command could not run (exit ${exitCode}): /bin/sh: line 1: npm: command not found`);
+    const run = fail(started.run, problem!);
+    assert.deepEqual(run.status, { kind: "failed", node: "claim", error: problem });
+    assert.equal(run.attempts.length, 0);
+    assert.deepEqual(run.visits, started.run.visits);
+  }
+  assert.equal(commandProblem({ exitCode: 1, output: "1 failing" }), null);
+  assert.equal(commandProblem({ exitCode: 0, output: "" }), null);
+  assert.equal(commandProblem({ error: "timed out", output: "" }), null);
+  const run = complete(started.run, commandResult(claim, { exitCode: 1, output: "1 failing" }), ++clock);
+  assert.equal(run.attempts.at(-1)!.outcome, "fail");
+  assert.notEqual(run.status.kind, "failed");
+});
+
+test("the fix prompt on a revisit carries the diagnosis, the latest verify output and the result contract", () => {
+  let run = play(newRun(), [
+    ["claim", "fail"],
+    ["search", "pass"],
+    ["diagnose", "pass"],
+    ["fix", "pass"],
+    ["verify", "fail"],
+  ]);
+  run = begin(run, ++clock).run;
+  const prompt = buildAgentPrompt(run, "fix", { resultPath: "/runs/run-1/fix-2.result.json" });
+  assert.match(prompt, /^You are the Fix step of the Flow run "Fix failing test" \(run-1\)\. This is visit 2 of this step, out of at most 5\./);
+  assert.match(prompt, /diagnosis value 1/);
+  assert.match(prompt, /Verify ended "fail" on attempt 1/);
+  assert.match(prompt, /verify output 1/);
+  assert.match(prompt, /`\/runs\/run-1\/fix-2\.result\.json`/);
+  assert.ok(prompt.includes('{"outcome":"pass"|"fail","summary":"<2-5 sentences>","values":{"patch":"<string>"}}'));
+  assert.match(prompt, /Apply the diagnosis as the smallest change that makes `npm test -- money` pass/);
+
+  run = complete(run, { outcome: "pass", summary: "fix summary 2", values: { patch: "patch value 2" }, by: "agent" }, ++clock);
+  run = begin(play(run, [["verify", "fail"]]), ++clock).run;
+  const third = buildAgentPrompt(run, "fix", { resultPath: "/r" });
+  assert.match(third, /verify output 2/);
+  assert.doesNotMatch(third, /verify output 1/);
+});
+
+test("parseAgentResult accepts the contract and rejects a bad outcome or a missing value", () => {
+  assert.deepEqual(parseAgentResult('{"outcome":"pass","summary":"Done.","values":{"patch":"a.ts","extra":"x"}}', ["patch"]), {
+    outcome: "pass",
+    summary: "Done.",
+    values: { patch: "a.ts" },
+  });
+  assert.match((parseAgentResult('{"outcome":"ok","summary":"Done.","values":{"patch":"a.ts"}}', ["patch"]) as { error: string }).error, /outcome/);
+  assert.match((parseAgentResult('{"outcome":"pass","summary":"Done.","values":{}}', ["patch"]) as { error: string }).error, /values\.patch is missing/);
+  assert.match((parseAgentResult('{"outcome":"pass",', ["patch"]) as { error: string }).error, /not valid JSON/);
+});
+
+test("layout shows the retry pill, the red fail pills and the exhaustion pill, and marks the ones taken", () => {
+  const plain = layoutGraph(machine);
+  assert.deepEqual(plain.nodes.map((box) => box.id), [
+    "claim", "search", "diagnose", "fix", "verify", "judge", "already-passing", "done", "gave-up",
+  ]);
+  const text = (kind: string) => plain.pills.filter((pill) => pill.kind === kind).map((pill) => `${pill.node}: ${pill.text}`);
+  assert.deepEqual(text("budget"), ["fix: retries < 5"]);
+  assert.ok(text("fail").includes("verify: tests still failing"));
+  assert.ok(text("fail").includes("judge: reject"));
+  assert.ok(text("fail").includes("claim: fails, as expected → Search"));
+  assert.ok(text("fail").includes("search: on fail → Gave up"));
+  assert.deepEqual(text("exhausted"), ["fix: max retries → Gave up"]);
+  assert.ok(plain.pills.every((pill) => !pill.taken));
+
+  const loop: [string, Outcome][] = [];
+  for (let i = 0; i < 5; i++) loop.push(["fix", "pass"], ["verify", "fail"]);
+  const run = play(newRun(), [["claim", "fail"], ["search", "pass"], ["diagnose", "pass"], ...loop]);
+  const taken = layoutGraph(machine, run).pills.filter((pill) => pill.taken).map((pill) => `${pill.node}: ${pill.text}`);
+  assert.deepEqual(taken, ["claim: fails, as expected → Search", "fix: max retries → Gave up", "verify: tests still failing"]);
+});
+
+test("every example node's source line sets that node's id", () => {
   const lines = fs.readFileSync(new URL("../src/example.ts", import.meta.url), "utf8").split("\n");
   for (const node of machine.nodes) {
-    assert.ok(node.source, node.id);
-    assert.equal(node.source.file, "src/example.ts");
-    assert.match(lines[node.source.line - 1] ?? "", new RegExp(`id: "${node.id}"`));
+    assert.equal(node.source?.file, "src/example.ts", node.id);
+    assert.match(lines[node.source.line - 1] ?? "", new RegExp(`id: "${node.id}"`), node.id);
   }
 });
 
-test("one failure retries fix, then the run finishes at done", () => {
-  let run = createRun(machine);
-  let guard = 0;
-  while (run.status !== "done" && run.status !== "gave-up" && guard < 20) {
-    run = step(machine, run, { failuresBeforePass: 1, simulate: simulateFixFailingTest });
-    guard += 1;
-  }
-  assert.equal(run.status, "done");
-  assert.equal(run.visits.fix, 2);
-  assert.ok(run.completed.includes("search"));
-  assert.ok(run.completed.includes("diagnose"));
-  assert.equal(run.context["test-result"], "PASS");
-  assert.equal(run.activeId, "done");
+test("fillTemplate fills known keys and leaves unknown ones", () => {
+  assert.equal(fillTemplate("run {{ a }} then {{b}}", { a: "x" }), "run x then {{b}}");
 });
 
-test("burning retries takes the max-retries exit and lands on gave-up", () => {
-  let run = createRun(machine);
-  let guard = 0;
-  while (run.status !== "done" && run.status !== "gave-up" && guard < 40) {
-    run = step(machine, run, { failuresBeforePass: 9, simulate: simulateFixFailingTest });
-    guard += 1;
-  }
-  assert.equal(run.status, "gave-up");
-  assert.ok(run.takenErrorExits.includes("max-retries"));
-  assert.equal(run.visits.fix, 5);
-  assert.equal(run.activeId, "gave-up");
+test("isInside refuses a run folder that holds Flow's data folder", () => {
+  const flow = "/Users/x/.config/herdr-app/data/flow";
+  assert.equal(isInside(flow, "/Users/x"), true, "the home folder");
+  assert.equal(isInside(flow, "/Users/x/"), true, "the home folder with a slash");
+  assert.equal(isInside(flow, "/"), true, "the root");
+  assert.equal(isInside(flow, flow), true, "the data folder itself");
+  assert.equal(isInside(flow, "/Users/x/Projects/app"), false, "a project folder");
+  assert.equal(isInside(flow, "/Users/x/.config/herdr-app-other"), false, "a folder that only shares a prefix");
+  assert.equal(isInside(flow, "/Users/x/.config/herdr-app/data/flow-old"), false, "a sibling with a longer name");
 });
 
-test("focused prompt for fix names search and diagnose before they run", () => {
-  const prompt = buildFocusedPrompt(machine, createRun(machine), "fix");
-  assert.match(prompt.markdown, /Focused prompt — Fix/);
-  assert.match(prompt.markdown, /search/);
-  assert.match(prompt.markdown, /diagnose/);
-  assert.match(prompt.markdown, /not yet run/);
-  assert.ok(prompt.missing.includes("diagnosis"));
-  assert.deepEqual(ancestors(machine, "fix"), ["claim", "search", "diagnose"]);
+test("agentLaunchArgv keeps the prompt last and out of the shell script", () => {
+  const prompt = 'x"; touch /tmp/x; "';
+  const argv = agentLaunchArgv("/bin/zsh", ["claude", "--add-dir=/a b/visit"], prompt);
+  assert.deepEqual(argv.slice(0, 3), ["/bin/zsh", "-lic", 'exec "$0" "$@"']);
+  assert.equal(argv.at(-1), prompt);
+  assert.equal(argv.filter((part) => part === prompt).length, 1);
+  assert.ok(!argv[2].includes("touch"));
+  assert.ok(argv.includes("--add-dir=/a b/visit"));
 });
 
-test("focused prompt includes search and diagnose outputs after they run", () => {
-  let run = createRun(machine);
-  for (let i = 0; i < 3; i++) {
-    run = step(machine, run, { failuresBeforePass: 1, simulate: simulateFixFailingTest });
-  }
-  assert.deepEqual(run.completed, ["claim", "search", "diagnose"]);
-  assert.equal(run.activeId, "fix");
-  const prompt = buildFocusedPrompt(machine, run, "fix");
-  assert.match(prompt.markdown, /applyRefund mixes a float/);
-  assert.match(prompt.markdown, /Root cause/);
-  assert.equal(prompt.missing.length, 0);
-  assert.doesNotMatch(prompt.markdown, /Search[\s\S]*not yet run/);
+test("commandLaunchArgv keeps each env value and the command in one element", () => {
+  const value = 'x"; touch /tmp/p; "';
+  const command = 'echo "$A"; touch /tmp/q';
+  const argv = commandLaunchArgv("/bin/zsh", { A: value, B: "two words" }, command);
+  assert.deepEqual(argv, ["/usr/bin/env", `A=${value}`, "B=two words", "/bin/zsh", "-lic", `exec 2>&1\n${command}`]);
+  assert.deepEqual(argv.filter((part) => part.includes("touch /tmp/p")), [`A=${value}`]);
+  assert.equal(argv.filter((part) => part.includes("touch /tmp/q")).length, 1);
 });
 
-test("structural steps never take the retry", () => {
-  let run = createRun(machine);
-  for (let i = 0; i < 8; i++) run = step(machine, run, { structural: true });
-  assert.equal(run.visits.fix, 1);
-  assert.equal(run.status, "done");
+test("parseMachine rejects a bare --add-dir in agent", () => {
+  const raw = rawExample();
+  raw.agent = ["claude", "--add-dir", "{visitDir}"];
+  assert.throws(() => parseMachine(raw), /--add-dir=<dir>/);
 });
 
-test("layout shows the loop pill and both error exits", () => {
-  const layout = layoutGraph(machine);
-  assert.equal(layout.nodes.length, machine.nodes.length);
-  assert.ok(layout.pills.some((pill) => pill.kind === "loop" && /retries < 5/.test(pill.text)));
-  assert.ok(layout.pills.some((pill) => pill.exitId === "max-retries"));
-  assert.ok(layout.pills.some((pill) => pill.exitId === "still-failing"));
-  assert.ok(layout.spine);
-});
-
-test("adding a node and a transition changes the layout", () => {
-  const extra = parseMachine({
-    ...machine,
-    nodes: [
-      ...machine.nodes,
-      {
-        id: "note",
-        kind: "computer",
-        label: "Note",
-        promptOrDescription: "Write the postmortem.",
-        source: { file: "src/example.ts", line: 1 },
-      },
-    ],
-    transitions: [...machine.transitions, { from: "done", to: "note" }],
-  });
-  const before = layoutGraph(machine).nodes.map((box) => box.id);
-  const after = layoutGraph(extra).nodes.map((box) => box.id);
-  assert.ok(!before.includes("note"));
-  assert.ok(after.includes("note"));
-  assert.ok(after.indexOf("note") > after.indexOf("done"));
-});
-
-test("parseMachine rejects a dangling transition", () => {
-  assert.throws(() => parseMachine({ id: "x", nodes: machine.nodes, transitions: [{ from: "claim", to: "nope" }] }), /unknown node/);
+test("DEFAULT_AGENT writes --add-dir with an equals sign", () => {
+  assert.ok(DEFAULT_AGENT.includes("--add-dir={visitDir}"));
 });
