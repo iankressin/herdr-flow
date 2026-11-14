@@ -59,8 +59,9 @@ export const fixFailingTest: Machine = {
       produces: ["patch"],
       prompt:
         "Apply the diagnosis as the smallest change that makes `{{test_command}}` pass. " +
-        "Change the code under test, not the test: do not weaken, skip or delete assertions, and do not change the test command. " +
-        "Run the test command to check your change. " +
+        "Change the code where the diagnosis located the root cause, the code under test or the test and build configuration. " +
+        "Do not weaken, skip or delete assertions, change expected values, or change the test command. " +
+        "Run `{{test_command}}` yourself and check that it passes before you write your result. " +
         "In patch, list each file you changed and what changed in it. " +
         'Use "fail" only if you cannot make a change you believe in.',
     },
@@ -68,7 +69,7 @@ export const fixFailingTest: Machine = {
       id: "verify",
       kind: "computer",
       label: "Verify",
-      source: { file: FILE, line: 68 },
+      source: { file: FILE, line: 69 },
       requires: ["patch"],
       run: "{{test_command}}",
       produces: ["verify_output"],
@@ -77,19 +78,21 @@ export const fixFailingTest: Machine = {
       id: "judge",
       kind: "agent",
       label: "Judge",
-      source: { file: FILE, line: 77 },
+      source: { file: FILE, line: 78 },
       requires: ["diagnosis", "verify_output"],
       produces: ["verdict"],
       prompt:
         "`{{test_command}}` passes now. Review the change with `git diff` and `git status` against the diagnosis and the passing output below. " +
-        "Pass only if the change fixes the root cause in the code under test, stays small, and does not weaken, skip or delete any test. " +
+        "Pass if the original failing test now passes for a real reason: the change is small and addresses the root cause where the diagnosis located it, " +
+        "in the code under test or in the test or build configuration, and no test was deleted, skipped or weakened (no changed expected values, no relaxed assertions). " +
+        'Fail on a weakened or removed test, an unrelated change, or a pass that does not follow from the change. ' +
         "Do not edit files. Say why in verdict.",
     },
     {
       id: "already-passing",
       kind: "end",
       label: "Already passing",
-      source: { file: FILE, line: 89 },
+      source: { file: FILE, line: 92 },
       result: "success",
       description: "Nothing to fix",
     },
@@ -97,7 +100,7 @@ export const fixFailingTest: Machine = {
       id: "done",
       kind: "end",
       label: "Done",
-      source: { file: FILE, line: 97 },
+      source: { file: FILE, line: 100 },
       result: "success",
       description: "The test passes and the judge accepted the change",
     },
@@ -105,7 +108,7 @@ export const fixFailingTest: Machine = {
       id: "gave-up",
       kind: "end",
       label: "Gave up",
-      source: { file: FILE, line: 105 },
+      source: { file: FILE, line: 108 },
       result: "failure",
       description: "Flow stopped without an accepted fix",
     },
