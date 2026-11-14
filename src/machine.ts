@@ -52,13 +52,17 @@ export interface Machine {
   inputs: Input[];
   start: string;
   onExhausted?: string;
-  /** Argv prefix for agent nodes; `{runDir}` is filled and the prompt goes last. */
+  /** Argv prefix for agent nodes; `{visitDir}` is filled and the prompt goes last. */
   agent?: string[];
   nodes: MachineNode[];
   transitions: Transition[];
 }
 
-export const DEFAULT_AGENT = ["claude", "--add-dir={runDir}"];
+/**
+ * The agent may write only its visit folder, which holds its prompt and result. run.json and
+ * command outputs sit outside it, so an agent cannot change what the panel runs next.
+ */
+export const DEFAULT_AGENT = ["claude", "--add-dir={visitDir}"];
 /** `exec` refuses timeouts above ten minutes. */
 export const MAX_TIMEOUT_SEC = 600;
 
@@ -93,7 +97,7 @@ export function envName(key: string): string {
   return `FLOW_${key.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
@@ -247,6 +251,9 @@ export function parseMachine(raw: unknown): Machine {
       throw new Error("agent must be a non-empty list of strings");
     }
     agent = raw.agent as string[];
+    if (agent.some((part) => part.includes("{runDir}"))) {
+      throw new Error("agent uses {runDir}; an agent gets only its own visit folder, {visitDir}");
+    }
   }
 
   return { id, title, inputs, start, onExhausted, agent, nodes, transitions };

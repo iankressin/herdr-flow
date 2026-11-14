@@ -37,6 +37,7 @@ import { layoutGraph } from "./lib/layout.js";
 import { DEFAULT_AGENT, nodeOf, parseMachine } from "./lib/machine.js";
 import { buildAgentPrompt } from "./lib/prompt.js";
 import { parseAgentResult } from "./lib/result.js";
+import { parseRun } from "./lib/runfile.js";
 
 const RED = "#c4544a";
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -50,7 +51,22 @@ const machinesDir = () => `${flowDir()}/machines`;
 const stateFile = () => `${flowDir()}/state.json`;
 const runDir = (id) => `${flowDir()}/runs/${id}`;
 const runFile = (id) => `${runDir(id)}/run.json`;
-const visitFile = (id, node, visit, suffix) => `${runDir(id)}/${node}-${visit}.${suffix}`;
+const outputFile = (id, node, visit) => `${runDir(id)}/${node}-${visit}.output.txt`;
+
+/** The only folder an agent may write: its prompt and its result, nothing the panel runs. */
+function visitFiles(id, node, visit) {
+  const dir = `${runDir(id)}/visits/${node}-${visit}`;
+  return { dir, promptPath: `${dir}/prompt.md`, resultPath: `${dir}/result.json` };
+}
+
+/** Reads run.json through parseRun, since it holds the commands this panel runs. */
+async function readRun(id) {
+  const text = await readTextFile(runFile(id));
+  if (text == null) throw new Error(`Run ${id} has no run.json`);
+  const run = parseRun(JSON.parse(text));
+  if (run.id !== id) throw new Error(`run.json in ${id} names run ${run.id}`);
+  return { run, text };
+}
 const json = (value) => `${JSON.stringify(value, null, 2)}\n`;
 const message = (error) => String(error?.message ?? error);
 const alpha = (color, aa) => (/^#[0-9a-f]{6}$/i.test(color) ? color + aa : color);
@@ -219,9 +235,8 @@ export default class Flow extends View {
     const state = await readTextFile(stateFile());
     const id = state ? JSON.parse(state).current : null;
     if (!id) return;
-    const text = await readTextFile(runFile(id));
-    if (text == null) throw new Error(`Run ${id} has no run.json`);
-    this.adopt(JSON.parse(text), text);
+    const { run, text } = await readRun(id);
+    this.adopt(run, text);
   }
 
   adopt(run, text) {
@@ -272,12 +287,15 @@ export default class Flow extends View {
 
   async yieldRun(id, error) {
     this.owner = false;
-    const text = await readTextFile(runFile(id)).catch(() => null);
-    if (text && this.run?.id === id) {
-      this.run = JSON.parse(text);
-      this.written = text;
-    }
     this.note = `Another Flow panel moved this run, so this one stopped driving it (${message(error)}). Reload takes it back.`;
+    try {
+      const { run, text } = await readRun(id);
+      if (this.run?.id !== id) return;
+      this.run = run;
+      this.written = text;
+    } catch (loadError) {
+      this.note = `This panel stopped driving the run: ${message(loadError)}`;
+    }
   }
 
   still(id, node, visit) {
@@ -336,34 +354,32 @@ export default class Flow extends View {
     } catch (error) {
       ran = { error: message(error), output: "" };
     }
-    await replaceFile(visitFile(id, node.id, visit, "output.txt"), "error" in ran ? ran.error : ran.output).catch(() => {});
+    await replaceFile(outputFile(id, node.id, visit), "error" in ran ? ran.error : ran.output).catch(() => {});
     await this.update(cx, at(id, node.id, visit, (current) => complete(current, commandResult(node, ran), Date.now())));
   }
 
   async runAgent(cx, id, nodeId, visit) {
     const node = nodeOf(this.run.machine, nodeId);
+    // The paths always come from the run id, node and visit; run.json keeps a copy for people.
+    const files = visitFiles(id, nodeId, visit);
+    await exec("mkdir", ["-p", files.dir]);
     let handle = this.run.status.agent;
     if (!handle) {
-      const fresh = {
-        tab: newTabId(),
-        promptPath: visitFile(id, nodeId, visit, "prompt.md"),
-        resultPath: visitFile(id, nodeId, visit, "result.json"),
-      };
+      const fresh = { tab: newTabId(), promptPath: files.promptPath, resultPath: files.resultPath };
       await this.update(cx, at(id, nodeId, visit, (run) => attachAgent(run, fresh)));
       if (!this.still(id, nodeId, visit)) return;
       handle = fresh;
     }
     if (!handle.terminal) {
-      if (await this.collect(cx, id, node, visit, handle)) return;
-      const terminal = (await this.findAgent(id, nodeId, visit)) ?? (await this.launch(cx, id, node, visit, handle));
+      if (await this.collect(cx, id, node, visit, files)) return;
+      const terminal = (await this.findAgent(id, nodeId, visit)) ?? (await this.launch(cx, id, node, visit, handle.tab, files));
       if (!terminal) return;
       const live = { ...handle, terminal };
       await this.update(cx, at(id, nodeId, visit, (run) => attachAgent(run, live)));
       if (!this.still(id, nodeId, visit)) return;
-      handle = live;
-      this.nameTab(cx, handle.tab, `${node.label} #${visit}`);
+      this.nameTab(cx, live.tab, `${node.label} #${visit}`);
     }
-    await this.watchResult(cx, id, node, visit, handle);
+    await this.watchResult(cx, id, node, visit, files);
   }
 
   /** A live terminal a crashed panel already started for this visit. */
@@ -376,20 +392,20 @@ export default class Flow extends View {
     }
   }
 
-  async launch(cx, id, node, visit, handle) {
+  async launch(cx, id, node, visit, tab, files) {
     const run = this.run;
-    const prompt = buildAgentPrompt(run, node.id, { resultPath: handle.resultPath });
-    const argv = (run.machine.agent ?? DEFAULT_AGENT).map((part) => part.split("{runDir}").join(runDir(id)));
+    const prompt = buildAgentPrompt(run, node.id, { resultPath: files.resultPath });
+    const argv = (run.machine.agent ?? DEFAULT_AGENT).map((part) => part.split("{visitDir}").join(files.dir));
     let error;
     try {
-      await replaceFile(handle.promptPath, prompt);
+      await replaceFile(files.promptPath, prompt);
       // The labels put the agent in a new tab of the run's space. The prompt goes last: Claude's
       // --add-dir takes several values and would swallow a prompt that followed it.
       const started = await hc([
         "run", "--bg", "--json", "--keep", "--no-parent", "--cwd", run.folder,
         "--name", agentName(id, node.id, visit),
         "--label", `herdr.space=${run.space.id}`,
-        "--label", `herdr.tab=${handle.tab}`,
+        "--label", `herdr.tab=${tab}`,
         "--label", `flow.run=${id}`,
         "--label", `flow.node=${node.id}-${visit}`,
         ...argv,
@@ -417,8 +433,8 @@ export default class Flow extends View {
   }
 
   /** Completes the step and returns true when the agent's result file holds a valid result. */
-  async collect(cx, id, node, visit, handle) {
-    const text = await readTextFile(handle.resultPath);
+  async collect(cx, id, node, visit, files) {
+    const text = await readTextFile(files.resultPath);
     if (text == null) return false;
     const result = parseAgentResult(text, node.produces ?? []);
     if ("error" in result) {
@@ -433,12 +449,12 @@ export default class Flow extends View {
     return true;
   }
 
-  async watchResult(cx, id, node, visit, handle) {
+  async watchResult(cx, id, node, visit, files) {
     let change = null;
     while (this.still(id, node.id, visit)) {
-      if (await this.collect(cx, id, node, visit, handle)) return;
+      if (await this.collect(cx, id, node, visit, files)) return;
       if (!change) {
-        change = watchFolder(runDir(id)).then(
+        change = watchFolder(files.dir).then(
           () => {
             change = null;
           },
@@ -540,8 +556,9 @@ export default class Flow extends View {
       try {
         await this.loadMachines();
         if (this.run && !this.busy) {
-          const text = await readTextFile(runFile(this.run.id));
-          if (text != null) this.adopt(JSON.parse(text), text);
+          this.owner = false;
+          const { run, text } = await readRun(this.run.id);
+          this.adopt(run, text);
         }
         this.note = "Reloaded.";
       } catch (error) {

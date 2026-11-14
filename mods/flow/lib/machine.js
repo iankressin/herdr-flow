@@ -1,4 +1,8 @@
-export const DEFAULT_AGENT = ["claude", "--add-dir={runDir}"];
+/**
+ * The agent may write only its visit folder, which holds its prompt and result. run.json and
+ * command outputs sit outside it, so an agent cannot change what the panel runs next.
+ */
+export const DEFAULT_AGENT = ["claude", "--add-dir={visitDir}"];
 /** `exec` refuses timeouts above ten minutes. */
 export const MAX_TIMEOUT_SEC = 600;
 const KEY = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
@@ -28,7 +32,7 @@ export function missingKeys(text, values) {
 export function envName(key) {
     return `FLOW_${key.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 }
-function isRecord(value) {
+export function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function text(value, where) {
@@ -191,6 +195,9 @@ export function parseMachine(raw) {
             throw new Error("agent must be a non-empty list of strings");
         }
         agent = raw.agent;
+        if (agent.some((part) => part.includes("{runDir}"))) {
+            throw new Error("agent uses {runDir}; an agent gets only its own visit folder, {visitDir}");
+        }
     }
     return { id, title, inputs, start, onExhausted, agent, nodes, transitions };
 }

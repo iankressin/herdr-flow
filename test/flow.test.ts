@@ -10,6 +10,7 @@ import type { ComputerNode, Machine, Outcome } from "../src/machine.ts";
 import { fillTemplate, nodeOf, parseMachine } from "../src/machine.ts";
 import { buildAgentPrompt } from "../src/prompt.ts";
 import { parseAgentResult } from "../src/result.ts";
+import { parseRun } from "../src/runfile.ts";
 
 const machine = fixFailingTest;
 let clock = 1_000;
@@ -76,6 +77,34 @@ test("parseMachine rejects maxVisits without onExhausted", () => {
   const raw = rawExample();
   delete raw.onExhausted;
   assert.throws(() => parseMachine(raw), /needs onExhausted/);
+});
+
+test("parseMachine refuses to hand an agent the whole run folder", () => {
+  const raw = rawExample();
+  raw.agent = ["claude", "--add-dir={runDir}"];
+  assert.throws(() => parseMachine(raw), /agent uses \{runDir\}/);
+});
+
+test("parseRun reads back a run the engine wrote, attempts and agent handle included", () => {
+  let run = play(newRun(), [["claim", "fail"]]);
+  run = attachAgent(begin(run, ++clock).run, { tab: `tb${"0".repeat(32)}`, terminal: "t9", promptPath: "/p", resultPath: "/r" });
+  const raw = JSON.parse(JSON.stringify(run));
+  assert.deepEqual(JSON.parse(JSON.stringify(parseRun(raw))), raw);
+});
+
+test("parseRun rejects a run whose machine fails parseMachine", () => {
+  const raw = JSON.parse(JSON.stringify(newRun()));
+  raw.machine.nodes[4].run = "{{verify_output}}";
+  assert.throws(() => parseRun(raw), /run\.json machine: Node verify run uses \{\{verify_output\}\}/);
+});
+
+test("parseRun rejects a path-like id and a status that names an unknown node", () => {
+  const traversal = JSON.parse(JSON.stringify(newRun()));
+  traversal.id = "../../elsewhere";
+  assert.throws(() => parseRun(traversal), /id must be a plain name/);
+  const unknown = JSON.parse(JSON.stringify(newRun()));
+  unknown.status = { kind: "executing", node: "ghost", visit: 1, startedAt: 1 };
+  assert.throws(() => parseRun(unknown), /status\.node must name a computer or agent node/);
 });
 
 test("claim passing ends the run at already-passing", () => {
