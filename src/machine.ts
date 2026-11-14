@@ -249,6 +249,9 @@ export function parseMachine(raw: unknown): Machine {
       throw new Error("agent must be a non-empty list of strings");
     }
     agent = raw.agent as string[];
+    if (agent.includes("--add-dir")) {
+      throw new Error("agent has a bare --add-dir, which swallows the prompt that follows; write --add-dir=<dir>");
+    }
     if (agent.some((part) => part.includes("{runDir}"))) {
       throw new Error("agent uses {runDir}; an agent gets only its own visit folder, {visitDir}");
     }
