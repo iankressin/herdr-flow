@@ -66,6 +66,8 @@ export interface NewRun {
 
 export const OUTPUT_TAIL = 8000;
 const SUMMARY_LINES = 8;
+const EXIT_NOT_EXECUTABLE = 126;
+const EXIT_NOT_FOUND = 127;
 
 export function templateValues(run: Run): Record<string, string> {
   return { ...run.context, ...run.inputs };
@@ -226,7 +228,7 @@ function tail(text: string): string {
 }
 
 export function commandProblem(ran: { exitCode: number; output: string } | { error: string; output: string }): string | null {
-  if ("error" in ran || (ran.exitCode !== 126 && ran.exitCode !== 127)) return null;
+  if ("error" in ran || (ran.exitCode !== EXIT_NOT_EXECUTABLE && ran.exitCode !== EXIT_NOT_FOUND)) return null;
   const last = tail(ran.output.trimEnd()).split("\n").slice(-SUMMARY_LINES).join("\n");
   return `Command could not run (exit ${ran.exitCode})${last ? `: ${last}` : ""}`;
 }
