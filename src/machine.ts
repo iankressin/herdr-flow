@@ -63,6 +63,15 @@ export interface Machine {
  * command outputs sit outside it, so an agent cannot change what the panel runs next.
  */
 export const DEFAULT_AGENT = ["claude", "--add-dir={visitDir}"];
+/**
+ * What `hc run` executes for an agent: the person's login interactive shell, so tools set up in
+ * their rc files (node, npm) are on PATH. The script is fixed text. `exec "$0" "$@"` replaces the
+ * shell with the agent, whose argv and prompt arrive as separate elements and never become shell
+ * text. The prompt stays last.
+ */
+export function agentLaunchArgv(shell: string, agentArgv: string[], prompt: string): string[] {
+  return [shell, "-lic", 'exec "$0" "$@"', ...agentArgv, prompt];
+}
 /** `exec` refuses timeouts above ten minutes. */
 export const MAX_TIMEOUT_SEC = 600;
 

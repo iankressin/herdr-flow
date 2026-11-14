@@ -53,8 +53,9 @@ Card order follows `pass` edges from `start`, then the other working nodes, then
   hc run --bg --json --keep --no-parent --cwd <folder> --name flow-<16 hex>
     --label herdr.space=<space id> --label herdr.tab=tb<32 hex>
     --label flow.run=<run id> --label flow.node=<node>-<visit>
-    claude --add-dir=<visit dir> <prompt>
+    <shell> -lic 'exec "$0" "$@"' claude --add-dir=<visit dir> <prompt>
   ```
+  Agents start through the person's login shell (`$SHELL -lic`, else the account's shell, else `/bin/sh`) so they see the same tools as their terminals.
 
 - Files under `~/.config/herdr-app/data/flow/`: `machines/*.json`, `state.json` (`{"current": runId}`), and `runs/<runId>/` with `run.json`, `<node>-<visit>.output.txt`, and `visits/<node>-<visit>/` holding `prompt.md` and `result.json`. Plus `focused-prompt.md`.
 

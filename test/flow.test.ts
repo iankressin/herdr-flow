@@ -7,7 +7,7 @@ import type { Run } from "../src/engine.ts";
 import { fixFailingTest } from "../src/example.ts";
 import { layoutGraph } from "../src/layout.ts";
 import type { ComputerNode, Machine, Outcome } from "../src/machine.ts";
-import { fillTemplate, nodeOf, parseMachine } from "../src/machine.ts";
+import { agentLaunchArgv, fillTemplate, nodeOf, parseMachine } from "../src/machine.ts";
 import { buildAgentPrompt } from "../src/prompt.ts";
 import { parseAgentResult } from "../src/result.ts";
 import { parseRun } from "../src/runfile.ts";
@@ -313,4 +313,14 @@ test("isInside refuses a run folder that holds Flow's data folder", () => {
   assert.equal(isInside(flow, "/Users/x/Projects/app"), false, "a project folder");
   assert.equal(isInside(flow, "/Users/x/.config/herdr-app-other"), false, "a folder that only shares a prefix");
   assert.equal(isInside(flow, "/Users/x/.config/herdr-app/data/flow-old"), false, "a sibling with a longer name");
+});
+
+test("agentLaunchArgv keeps the prompt last and out of the shell script", () => {
+  const prompt = 'x"; touch /tmp/x; "';
+  const argv = agentLaunchArgv("/bin/zsh", ["claude", "--add-dir=/a b/visit"], prompt);
+  assert.deepEqual(argv.slice(0, 3), ["/bin/zsh", "-lic", 'exec "$0" "$@"']);
+  assert.equal(argv.at(-1), prompt);
+  assert.equal(argv.filter((part) => part === prompt).length, 1);
+  assert.ok(!argv[2].includes("touch"));
+  assert.ok(argv.includes("--add-dir=/a b/visit"));
 });

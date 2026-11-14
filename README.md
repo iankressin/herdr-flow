@@ -55,8 +55,10 @@ Each visit of an agent step gets its own folder, `runs/<run id>/visits/<node>-<v
 hc run --bg --json --keep --no-parent --cwd <folder> --name flow-<hash> \
   --label herdr.space=<space> --label herdr.tab=<new tab id> \
   --label flow.run=<run id> --label flow.node=<node>-<visit> \
-  claude --add-dir=<visit folder> "<prompt>"
+  <shell> -lic 'exec "$0" "$@"' claude --add-dir=<visit folder> "<prompt>"
 ```
+
+Agents start through your login shell (`$SHELL -lic`), so they see the same tools as your terminals. `exec` makes the agent replace the shell, and the prompt stays its own argument.
 
 The prompt holds the step's task, the values its `requires` names, the summaries of the steps that led to it along pass edges, and, on a second visit, its earlier attempts and the output that sent it back. It ends with a contract. The agent writes one JSON object to `result.json` in its visit folder, as its last act:
 

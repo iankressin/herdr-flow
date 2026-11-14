@@ -38,7 +38,7 @@ import {
 import { SCREEN_RECHECK_MS, START_GRACE_MS, agentLook } from "./lib/agentstate.js";
 import { fixFailingTest } from "./lib/example.js";
 import { layoutGraph } from "./lib/layout.js";
-import { DEFAULT_AGENT, nodeOf, parseMachine } from "./lib/machine.js";
+import { DEFAULT_AGENT, agentLaunchArgv, nodeOf, parseMachine } from "./lib/machine.js";
 import { buildAgentPrompt } from "./lib/prompt.js";
 import { parseAgentResult } from "./lib/result.js";
 import { parseRun } from "./lib/runfile.js";
@@ -137,6 +137,14 @@ function currentNode(run) {
   }
 }
 
+/** The person's login shell: $SHELL, else the account's UserShell, else /bin/sh. */
+async function loginShell() {
+  const env = (await exec("/bin/sh", ["-c", 'printf %s "${SHELL:-}"']).catch(() => null))?.stdout.trim();
+  if (env) return env;
+  const record = await exec("dscl", [".", "-read", home(), "UserShell"]).catch(() => null);
+  return record?.stdout.match(/UserShell:\s*(\S+)/)?.[1] ?? "/bin/sh";
+}
+
 /** A change that applies only while run `id` is still executing `node` at `visit`. */
 function at(id, node, visit, change) {
   return (run) => (run.id === id && isExecuting(run, node, visit) ? change(run) : run);
@@ -198,6 +206,7 @@ export default class Flow extends View {
     this.queue = Promise.resolve();
     this.waiters = [];
     this.startError = null;
+    this.shell = "/bin/sh";
     this.resultError = null;
     // When this visit's terminal was started or adopted, its latest screen text, and the visit already toasted.
     this.startClock = null;
@@ -226,6 +235,7 @@ export default class Flow extends View {
   boot(cx) {
     cx.spawn(async (cx) => {
       try {
+        this.shell = await loginShell();
         await exec("mkdir", ["-p", machinesDir(), `${flowDir()}/runs`]);
         await this.loadMachines();
         await this.loadCurrent();
@@ -510,8 +520,10 @@ export default class Flow extends View {
     let error;
     try {
       await replaceFile(files.promptPath, prompt);
-      // The labels put the agent in a new tab of the run's space. The prompt goes last: Claude's
-      // --add-dir takes several values and would swallow a prompt that followed it.
+      // The labels put the agent in a new tab of the run's space. The agent starts through the person's
+      // login interactive shell, so tools set up in their rc files (node, npm) are on PATH, as for Herdr's
+      // own launcher; exec makes the agent replace the shell. The prompt goes last: Claude's --add-dir
+      // takes several values and would swallow a prompt that followed it.
       const started = await hc([
         "run", "--bg", "--json", "--keep", "--no-parent", "--cwd", run.folder,
         "--name", agentName(id, node.id, visit),
@@ -519,8 +531,7 @@ export default class Flow extends View {
         "--label", `herdr.tab=${tab}`,
         "--label", `flow.run=${id}`,
         "--label", `flow.node=${node.id}-${visit}`,
-        ...argv,
-        prompt,
+        ...agentLaunchArgv(this.shell, argv, prompt),
       ]);
       const address = started.code === 0 ? JSON.parse(started.stdout).address : null;
       if (address) return address;
