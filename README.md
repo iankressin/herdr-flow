@@ -38,7 +38,7 @@ Search, Diagnose and Fix go to **Gave up** when they fail. A sixth trip to Fix a
 
 To run it:
 
-1. Click a terminal in the space you want the agents to work in. Flow starts in that terminal's folder.
+1. Click a terminal in the space you want the agents to work in. Flow starts in that terminal's folder. It refuses a folder that holds its own files, such as your home folder, because agents can write where they work.
 2. In the panel, type the test command that fails now, for example `npm test -- money`.
 3. Click **Start in <space>**.
 4. Click **Step** to run one step, or **Run** to keep going until the run finishes or fails.
@@ -134,7 +134,7 @@ Everything lives under `~/.config/herdr-app/data/flow/`:
 | `runs/<run id>/visits/<node>-<visit>/result.json` | The result the agent wrote |
 | `focused-prompt.md` | The last prompt you copied |
 
-An agent can write only its own visit folder. It cannot reach `run.json`, which holds the commands Flow runs, or the command outputs. When the panel loads `run.json`, it checks the embedded machine with the same rules as a machine file, and checks every other field. A run that fails the check shows its error and does not run.
+An agent can write only its own visit folder. It cannot reach `run.json`, which holds the commands Flow runs, or the command outputs. When the panel loads `run.json`, it checks the embedded machine with the same rules as a machine file, and checks every other field. A run that fails the check shows its error and does not run. Before each step, Flow also refuses a run folder that contains `~/.config/herdr-app/data/flow`, after resolving both with `realpath`.
 
 When the panel loads, it picks up the current run. It keeps watching a live agent, adopts an agent terminal that a closed panel started, or starts the agent again. It reruns a command that was running. Each visit's agent has a fixed `hc` terminal name, so herdr-core refuses a second agent for the same visit. Flow writes `run.json` with compare-and-swap. If another Flow panel changed the run, this panel reloads it and stops driving it. **Reload** takes it back.
 

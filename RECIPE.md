@@ -25,7 +25,7 @@ Card order follows `pass` edges from `start`, then the other working nodes, then
 
 ## How it behaves
 
-- **Start** needs every input filled. It creates a run in the focused space, in the focused terminal's folder (else the space's folder, else home), copies the machine into the run, and makes it current. The run starts idle.
+- **Start** needs every input filled. It creates a run in the focused space, in the focused terminal's folder (else the space's folder, else home), copies the machine into the run, and makes it current. The run starts idle. When that folder contains Flow's data folder (both resolved with `realpath`), Start refuses with a red line on the start form: "Flow can't run in <folder>: agents working there could edit Flow's own files. Start it from a project folder." The same check runs before every step, so a resumed run in such a folder fails instead of running.
 - **Step** runs the next node and stops. **Run** turns auto on and keeps going until the run finishes or fails. **Pause** turns auto off. The running step still finishes.
 - A computer node runs `/usr/bin/env FLOW_<KEY>=<value>… /bin/sh -c "exec 2>&1\n<command>"` in the run's folder, with its `timeoutSec` (default and maximum 600). Exit 0 passes. Anything else, a timeout, or a failed start fails. The output tail becomes the value of each `produces` key. The card status line spins `running #N` with braille frames at 90ms.
 - An agent node starts an agent in a new tab named "<label> #<visit>". The agent may write only its visit folder, `runs/<runId>/visits/<node>-<visit>/`. The card shows the agent's live status from `agents()`: working (spinner, `working`), needs you (`blocked` color, when the agent asks a question), stopped without a result (red, idle with no valid result), and closed (red, the terminal is gone). The step completes when the agent writes a valid result file. A bad file keeps the step running and shows the error on the card and in the detail block.
@@ -68,6 +68,7 @@ Card order follows `pass` edges from `start`, then the other working nodes, then
 - A watch event can arrive between reading the result file and starting the next `watchFolder`. The panel also rereads the file every 5 seconds while an agent works.
 - Agents read untrusted code, so their values never become shell text. Computer `run` templates take only inputs, `produces` may not name an input, and step values reach commands as `FLOW_<KEY>` variables through `env`'s argv.
 - An agent may write only its visit folder (`--add-dir=<visit dir>`; machines use `{visitDir}`, and `{runDir}` is refused). `run.json` holds the machine copy with its commands, so an agent that could write it could choose what the panel runs next. The panel derives visit paths from the run id, node and visit, and loads `run.json` only through `parseRun`, which checks the machine with `parseMachine`. A run that fails shows its error and is never driven.
+- An agent's default write scope is its working folder. A space at the home folder would cover `data/flow`, so `isInside(realFlowDir, realFolder)` refuses it. Compare whole path segments: `/Users/x/.config/herdr-app-other` does not contain `/Users/x/.config/herdr-app`.
 - `run.json` is compare-and-swap against the text this panel last wrote. Two panels that read different versions can both claim a run, so the agent's fixed `--name` is what stops a second launch: herdr-core refuses a second live terminal with the same name, and the loser adopts the winner's terminal by its labels.
 - Changes to the run go through one queue per panel, each applied to the latest run. Two changes computed from the same run would make the panel refuse its own second write.
 - Flow refuses spaces on other machines. `exec`, `watchFolder` and the labels it writes assume this computer.
@@ -84,3 +85,4 @@ Card order follows `pass` edges from `start`, then the other working nodes, then
 - A run that passes Judge ends with "finished: success" and the Done card tinted.
 - Close and reopen the panel while an agent works. The run resumes on the same terminal, and no second agent starts.
 - A test command that already passes ends the run at Already passing after one step.
+- Start from a terminal in your home folder: the start form says Flow can't run there, and no run starts.
