@@ -485,7 +485,7 @@ export default class Flow extends View {
     const machine = this.machine;
     const inputs = {};
     for (const input of machine.inputs) {
-      const value = this.fields[input.key]?.value().trim() ?? "";
+      const value = this.fields[input.key].value().trim();
       if (!value) {
         this.note = `Fill in "${input.label}" first.`;
         return;
@@ -609,7 +609,7 @@ export default class Flow extends View {
 
   previewRun() {
     const where = this.startSpace();
-    const inputs = Object.fromEntries(this.machine.inputs.map((input) => [input.key, this.fields[input.key]?.value() ?? ""]));
+    const inputs = Object.fromEntries(this.machine.inputs.map((input) => [input.key, this.fields[input.key].value()]));
     const space = { id: where.space?.id ?? "", name: where.space?.name ?? "" };
     return createRun(this.machine, { id: "preview", space, folder: where.folder ?? "", inputs, now: Date.now() });
   }
@@ -708,7 +708,6 @@ export default class Flow extends View {
       .gap(6)
       .children(
         machine.inputs
-          .filter((input) => this.fields[input.key])
           .map((input) =>
             v_flex()
               .id(`input-${input.key}`)
