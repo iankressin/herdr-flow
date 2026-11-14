@@ -176,6 +176,7 @@ export default class Flow extends View {
     this.busy = false;
     this.starting = false;
     this.queue = Promise.resolve();
+    this.waiters = [];
     this.resultError = null;
     this.selected = fixFailingTest.start;
     this.follow = true;
@@ -278,6 +279,7 @@ export default class Flow extends View {
       this.run = stamped;
       this.written = text;
       if (this.follow) this.selected = currentNode(stamped);
+      this.wake();
       cx.notify();
       return true;
     });
@@ -287,6 +289,7 @@ export default class Flow extends View {
 
   async yieldRun(id, error) {
     this.owner = false;
+    this.wake();
     this.note = `Another Flow panel moved this run, so this one stopped driving it (${message(error)}). Reload takes it back.`;
     try {
       const { run, text } = await readRun(id);
@@ -300,6 +303,20 @@ export default class Flow extends View {
 
   still(id, node, visit) {
     return this.owner && this.run?.id === id && isExecuting(this.run, node, visit);
+  }
+
+  wake() {
+    for (const resolve of this.waiters.splice(0)) resolve();
+  }
+
+  /** Resolves at the next change to the run (or to who drives it). */
+  changed() {
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  /** Resolves once the run is no longer executing this visit here, say because a person decided it. */
+  async left(id, node, visit) {
+    while (this.still(id, node, visit)) await this.changed();
   }
 
   /** Runs the next step, then keeps going while the run is on auto. One loop per panel. */
@@ -343,19 +360,22 @@ export default class Flow extends View {
     const visit = run.status.visit;
     const node = nodeOf(run.machine, effect.node);
     const env = Object.entries(effect.env).map(([key, value]) => `${key}=${value}`);
-    let ran;
-    try {
-      // Step values travel as environment variables in argv; the shell text holds inputs only.
-      const result = await exec("/usr/bin/env", [...env, "/bin/sh", "-c", `exec 2>&1\n${effect.command}`], {
-        cwd: run.folder,
-        timeout: effect.timeoutSec * 1000,
+    // Step values travel as environment variables in argv; the shell text holds inputs only.
+    const running = exec("/usr/bin/env", [...env, "/bin/sh", "-c", `exec 2>&1\n${effect.command}`], {
+      cwd: run.folder,
+      timeout: effect.timeoutSec * 1000,
+    })
+      .then(
+        (result) => ({ exitCode: result.code, output: `${result.stdout}${result.stderr}` }),
+        (error) => ({ error: message(error), output: "" }),
+      )
+      .then(async (ran) => {
+        await replaceFile(outputFile(id, node.id, visit), "error" in ran ? ran.error : ran.output).catch(() => {});
+        return ran;
       });
-      ran = { exitCode: result.code, output: `${result.stdout}${result.stderr}` };
-    } catch (error) {
-      ran = { error: message(error), output: "" };
-    }
-    await replaceFile(outputFile(id, node.id, visit), "error" in ran ? ran.error : ran.output).catch(() => {});
-    await this.update(cx, at(id, node.id, visit, (current) => complete(current, commandResult(node, ran), Date.now())));
+    // A person may decide the step while a hung command runs on; stop waiting for it then.
+    const ran = await Promise.race([running, this.left(id, node.id, visit).then(() => null)]);
+    if (ran) await this.update(cx, at(id, node.id, visit, (current) => complete(current, commandResult(node, ran), Date.now())));
   }
 
   async runAgent(cx, id, nodeId, visit) {
@@ -464,7 +484,7 @@ export default class Flow extends View {
             }),
         );
       }
-      await Promise.race([change, wait(cx, RECHECK_MS)]);
+      await Promise.race([change, wait(cx, RECHECK_MS), this.changed()]);
     }
   }
 
@@ -521,6 +541,7 @@ export default class Flow extends View {
     this.selected = this.machine.start;
     this.follow = true;
     this.note = "";
+    this.wake();
     cx.spawn(async (cx) => {
       try {
         await replaceFile(stateFile(), json({ current: null }));
