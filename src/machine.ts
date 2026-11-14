@@ -67,7 +67,8 @@ export const DEFAULT_AGENT = ["claude", "--add-dir={visitDir}"];
  * What `hc run` executes for an agent: the person's login interactive shell, so tools set up in
  * their rc files (node, npm) are on PATH. The script is fixed text. `exec "$0" "$@"` replaces the
  * shell with the agent, whose argv and prompt arrive as separate elements and never become shell
- * text. The prompt stays last.
+ * text. The prompt goes last: Claude's `--add-dir` takes several values and would swallow a prompt
+ * that followed it.
  */
 export function agentLaunchArgv(shell: string, agentArgv: string[], prompt: string): string[] {
   return [shell, "-lic", 'exec "$0" "$@"', ...agentArgv, prompt];

@@ -400,7 +400,6 @@ export default class Flow extends View {
     const visit = run.status.visit;
     const node = nodeOf(run.machine, effect.node);
     const env = Object.entries(effect.env).map(([key, value]) => `${key}=${value}`);
-    // Step values travel as environment variables in argv; the shell text holds inputs only.
     // -lic: tools such as npm are set up in the person's shell rc, as Herdr's agent launcher assumes.
     // The command is one argv element ($1), never spliced into shell code. It merges stderr itself, so
     // stdout holds its output; stderr only carries shell start-up noise.
@@ -476,13 +475,8 @@ export default class Flow extends View {
     cx.spawn(async (cx) => {
       await wait(cx, Math.max(0, this.startClock.since + START_GRACE_MS - Date.now()));
       while (silent()) {
-        let text = null;
-        try {
-          const read = await hc(["read", terminal, "--lines", "40"]);
-          if (read.code === 0) text = read.stdout;
-        } catch {
-          text = null;
-        }
+        const read = await hc(["read", terminal, "--lines", "40"]).catch(() => null);
+        const text = read?.code === 0 ? read.stdout : null;
         if (!silent()) break;
         this.screen = { id, node: node.id, visit, text };
         const look = this.agentState(this.run);
@@ -520,10 +514,7 @@ export default class Flow extends View {
     let error;
     try {
       await replaceFile(files.promptPath, prompt);
-      // The labels put the agent in a new tab of the run's space. The agent starts through the person's
-      // login interactive shell, so tools set up in their rc files (node, npm) are on PATH, as for Herdr's
-      // own launcher; exec makes the agent replace the shell. The prompt goes last: Claude's --add-dir
-      // takes several values and would swallow a prompt that followed it.
+      // The labels put the agent in a new tab of the run's space.
       const started = await hc([
         "run", "--bg", "--json", "--keep", "--no-parent", "--cwd", run.folder,
         "--name", agentName(id, node.id, visit),
