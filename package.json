@@ -7,5 +7,8 @@
     "emit": "node scripts/emit.mjs",
     "test": "node --experimental-strip-types --test test/flow.test.ts",
     "check": "node scripts/emit.mjs && node --experimental-strip-types --test test/flow.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
   }
 }
