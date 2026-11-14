@@ -280,7 +280,8 @@ test("layout shows the retry pill, the red fail pills and the exhaustion pill, a
   assert.deepEqual(text("budget"), ["fix: retries < 5"]);
   assert.ok(text("fail").includes("verify: tests still failing"));
   assert.ok(text("fail").includes("judge: reject"));
-  assert.ok(text("fail").includes("claim: on fail → Search"));
+  assert.ok(text("fail").includes("claim: fails, as expected → Search"));
+  assert.ok(text("fail").includes("search: on fail → Gave up"));
   assert.deepEqual(text("exhausted"), ["fix: max retries → Gave up"]);
   assert.ok(plain.pills.every((pill) => !pill.taken));
 
@@ -288,7 +289,7 @@ test("layout shows the retry pill, the red fail pills and the exhaustion pill, a
   for (let i = 0; i < 5; i++) loop.push(["fix", "pass"], ["verify", "fail"]);
   const run = play(newRun(), [["claim", "fail"], ["search", "pass"], ["diagnose", "pass"], ...loop]);
   const taken = layoutGraph(machine, run).pills.filter((pill) => pill.taken).map((pill) => `${pill.node}: ${pill.text}`);
-  assert.deepEqual(taken, ["claim: on fail → Search", "fix: max retries → Gave up", "verify: tests still failing"]);
+  assert.deepEqual(taken, ["claim: fails, as expected → Search", "fix: max retries → Gave up", "verify: tests still failing"]);
 });
 
 test("every example node's source line sets that node's id", () => {

@@ -112,7 +112,7 @@ export const fixFailingTest: Machine = {
   ],
   transitions: [
     { from: "claim", on: "pass", to: "already-passing" },
-    { from: "claim", on: "fail", to: "search" },
+    { from: "claim", on: "fail", to: "search", label: "fails, as expected → Search" },
     { from: "search", on: "pass", to: "diagnose" },
     { from: "search", on: "fail", to: "gave-up" },
     { from: "diagnose", on: "pass", to: "fix" },
