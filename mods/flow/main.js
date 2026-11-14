@@ -355,7 +355,7 @@ export default class Flow extends View {
             });
             if (!begun) break;
           } else if (this.run.status.kind === "executing") {
-            if (!(await this.update(cx, (run) => ({ ...run })))) break;
+            if (!(await this.claim(cx))) break;
             effect = pendingEffect(this.run);
           } else {
             break;
@@ -369,6 +369,10 @@ export default class Flow extends View {
       this.busy = false;
       cx.notify();
     });
+  }
+
+  claim(cx) {
+    return this.update(cx, (run) => ({ ...run }));
   }
 
   async runCommand(cx, id, effect) {
