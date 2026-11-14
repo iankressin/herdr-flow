@@ -40,8 +40,6 @@ function parseHandle(raw: unknown): AgentHandle {
   return {
     tab: raw.tab,
     ...(raw.terminal != null ? { terminal: text(raw.terminal, "status.agent.terminal") } : {}),
-    promptPath: text(raw.promptPath, "status.agent.promptPath"),
-    resultPath: text(raw.resultPath, "status.agent.resultPath"),
   };
 }
 

@@ -20,8 +20,6 @@ export interface Attempt {
 export interface AgentHandle {
   tab: string;
   terminal?: string;
-  promptPath: string;
-  resultPath: string;
 }
 
 export type RunStatus =

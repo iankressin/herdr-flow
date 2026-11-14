@@ -35,8 +35,6 @@ function parseHandle(raw) {
     return {
         tab: raw.tab,
         ...(raw.terminal != null ? { terminal: text(raw.terminal, "status.agent.terminal") } : {}),
-        promptPath: text(raw.promptPath, "status.agent.promptPath"),
-        resultPath: text(raw.resultPath, "status.agent.resultPath"),
     };
 }
 function parseStatus(raw, machine) {

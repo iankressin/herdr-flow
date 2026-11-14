@@ -400,7 +400,7 @@ export default class Flow extends View {
     await exec("mkdir", ["-p", files.dir]);
     let handle = this.run.status.agent;
     if (!handle) {
-      const fresh = { tab: newTabId(), promptPath: files.promptPath, resultPath: files.resultPath };
+      const fresh = { tab: newTabId() };
       await this.update(cx, at(id, nodeId, visit, (run) => attachAgent(run, fresh)));
       if (!this.still(id, nodeId, visit)) return;
       handle = fresh;
@@ -658,7 +658,8 @@ export default class Flow extends View {
   copyPrompt(cx, node) {
     const run = this.run ?? this.previewRun();
     const status = run.status;
-    const resultPath = status.kind === "executing" && status.node === node.id && status.agent ? status.agent.resultPath : "<result file>";
+    const resultPath =
+      status.kind === "executing" && status.node === node.id ? visitFiles(run.id, node.id, status.visit).resultPath : "<result file>";
     const text = buildAgentPrompt(run, node.id, { resultPath });
     let copied = false;
     try {

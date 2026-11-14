@@ -87,9 +87,17 @@ test("parseMachine refuses to hand an agent the whole run folder", () => {
 
 test("parseRun reads back a run the engine wrote, attempts and agent handle included", () => {
   let run = play(newRun(), [["claim", "fail"]]);
-  run = attachAgent(begin(run, ++clock).run, { tab: `tb${"0".repeat(32)}`, terminal: "t9", promptPath: "/p", resultPath: "/r" });
+  run = attachAgent(begin(run, ++clock).run, { tab: `tb${"0".repeat(32)}`, terminal: "t9" });
   const raw = JSON.parse(JSON.stringify(run));
   assert.deepEqual(JSON.parse(JSON.stringify(parseRun(raw))), raw);
+});
+
+test("parseRun drops the file paths an older run.json kept in the agent handle", () => {
+  let run = play(newRun(), [["claim", "fail"]]);
+  run = attachAgent(begin(run, ++clock).run, { tab: `tb${"0".repeat(32)}`, terminal: "t9" });
+  const raw = JSON.parse(JSON.stringify(run));
+  const older = { ...raw, status: { ...raw.status, agent: { ...raw.status.agent, promptPath: "/p", resultPath: "/r" } } };
+  assert.deepEqual(JSON.parse(JSON.stringify(parseRun(older))), raw);
 });
 
 test("parseRun rejects a run whose machine fails parseMachine", () => {
@@ -195,7 +203,7 @@ test("a command whose input is unset fails the run instead of running", () => {
 test("a person can decide a failed step, and retry runs it again", () => {
   let run = play(newRun(), [["claim", "fail"]]);
   const started = begin(run, ++clock);
-  run = fail(attachAgent(started.run, { tab: "tb1", terminal: "t9", promptPath: "/p", resultPath: "/r" }), "launch failed");
+  run = fail(attachAgent(started.run, { tab: "tb1", terminal: "t9" }), "launch failed");
   assert.deepEqual(run.status, { kind: "failed", node: "search", error: "launch failed" });
   assert.deepEqual(retry(run).status, { kind: "idle", next: "search" });
   run = complete(run, { outcome: "pass", summary: "Found it by hand.", values: { findings: "money.ts" }, by: "person" }, ++clock);
