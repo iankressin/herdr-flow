@@ -1,6 +1,4 @@
-/** How long a live agent terminal may go without reporting a status before it counts as not started. */
 export const START_GRACE_MS = 15_000;
-/** How often the panel rereads a not-started terminal's screen. */
 export const SCREEN_RECHECK_MS = 10_000;
 
 export interface AgentLook {
@@ -8,20 +6,14 @@ export interface AgentLook {
   spin?: boolean;
   blocked?: boolean;
   stuck?: boolean;
-  /** The terminal is live but its agent never reported a status. */
   notStarted?: boolean;
 }
 
 export interface AgentInput {
-  /** The status the terminal's agent reported, or null when it is not in Herdr's agent list. */
   status: string | null;
-  /** The terminal exists and is running. */
   live: boolean;
-  /** Milliseconds since the step started or the terminal was attached. */
   sinceMs: number;
-  /** The terminal's recent screen text, or null when not read. */
   screen: string | null;
-  /** Why the agent's result file was rejected, if it was. */
   error: string | null;
 }
 

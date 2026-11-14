@@ -99,10 +99,6 @@ function parseAttempt(raw, index, machine) {
         by: raw.by,
     };
 }
-/**
- * The boundary for run.json. The file holds the commands the panel runs, so loading it checks the
- * embedded machine again with parseMachine and every field the engine reads.
- */
 export function parseRun(raw) {
     if (!isRecord(raw))
         bad("must hold one JSON object");

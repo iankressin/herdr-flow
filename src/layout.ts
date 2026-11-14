@@ -10,14 +10,12 @@ export interface Box {
   h: number;
 }
 
-/** budget: the accent retry pill. fail: a red fail edge. exhausted: the red "max retries" exit. */
 export type PillKind = "budget" | "fail" | "exhausted";
 
 export interface Pill extends Box {
   node: string;
   kind: PillKind;
   text: string;
-  /** The edge or exit fired at least once in the run. Budget pills are never taken. */
   taken: boolean;
 }
 
@@ -38,7 +36,6 @@ const PAD_X = 48;
 const PAD_Y = 16;
 const SPINE_X = 26;
 
-/** Pass edges from start first (the happy path), then other working nodes, then end nodes. */
 export function displayOrder(machine: Machine): string[] {
   const order: string[] = [];
   let cursor: string | undefined = machine.start;

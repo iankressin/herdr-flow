@@ -1,7 +1,3 @@
-// Flow: one agent workflow, drawn as a state machine and run for real.
-// Computer steps run a shell command. Agent steps start an agent in a new tab of the run's space
-// and wait for the result file it writes. ./lib holds the pure engine; this file does the I/O.
-
 import { View, div } from "gpui-kit";
 import { Input, InputState, h_flex, v_flex } from "gpui-base";
 import { readdir } from "fs/promises";
@@ -45,8 +41,6 @@ import { parseRun } from "./lib/runfile.js";
 
 const RED = "#c4544a";
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-// A watch event can slip between reading the result file and starting the next watch, so the
-// file is also read this often while an agent works.
 const RECHECK_MS = 5000;
 const SUMMARY_LINES = 200;
 
@@ -57,13 +51,11 @@ const runDir = (id) => `${flowDir()}/runs/${id}`;
 const runFile = (id) => `${runDir(id)}/run.json`;
 const outputFile = (id, node, visit) => `${runDir(id)}/${node}-${visit}.output.txt`;
 
-/** The only folder an agent may write: its prompt and its result, nothing the panel runs. */
 function visitFiles(id, node, visit) {
   const dir = `${runDir(id)}/visits/${node}-${visit}`;
   return { dir, promptPath: `${dir}/prompt.md`, resultPath: `${dir}/result.json` };
 }
 
-/** Reads run.json through parseRun, since it holds the commands this panel runs. */
 async function readRun(id) {
   const text = await readTextFile(runFile(id));
   if (text == null) throw new Error(`Run ${id} has no run.json`);
@@ -78,7 +70,6 @@ async function realpath(path) {
   return resolved.stdout.trim();
 }
 
-/** Why a run may not work in `folder`, or null. Agents can write where they work. */
 async function folderProblem(folder) {
   try {
     if (!isInside(await realpath(flowDir()), await realpath(folder))) return null;
@@ -96,7 +87,6 @@ function wait(cx, ms) {
   return new Promise((resolve) => cx.timer.after(ms, () => resolve()));
 }
 
-/** For files no other writer races for: prompts, outputs, state.json, the copied prompt. */
 async function replaceFile(path, text) {
   await writeTextFile(path, text, await readTextFile(path));
 }
@@ -108,8 +98,8 @@ function newTabId() {
 }
 
 /**
- * One terminal name per run, node and visit. herdr-core refuses a second live terminal with the
- * same name, so two panels resuming the same visit can never both start its agent.
+ * herdr-core refuses a second live terminal with the same name, so two panels resuming the same
+ * visit can never both start its agent.
  */
 function agentName(id, node, visit) {
   let a = 0x811c9dc5;
@@ -137,7 +127,6 @@ function currentNode(run) {
   }
 }
 
-/** The person's login shell: $SHELL, else the account's UserShell, else /bin/sh. */
 async function loginShell() {
   const env = (await exec("/bin/sh", ["-c", 'printf %s "${SHELL:-}"']).catch(() => null))?.stdout.trim();
   if (env) return env;
@@ -145,7 +134,6 @@ async function loginShell() {
   return record?.stdout.match(/UserShell:\s*(\S+)/)?.[1] ?? "/bin/sh";
 }
 
-/** A change that applies only while run `id` is still executing `node` at `visit`. */
 function at(id, node, visit, change) {
   return (run) => (run.id === id && isExecuting(run, node, visit) ? change(run) : run);
 }
@@ -198,7 +186,6 @@ export default class Flow extends View {
     this.pick = 0;
     this.fields = {};
     this.run = null;
-    // run.json as this panel last wrote or read it: the expected text for compare-and-swap.
     this.written = null;
     this.owner = false;
     this.busy = false;
@@ -208,7 +195,6 @@ export default class Flow extends View {
     this.startError = null;
     this.shell = "/bin/sh";
     this.resultError = null;
-    // When this visit's terminal was started or adopted, its latest screen text, and the visit already toasted.
     this.startClock = null;
     this.screen = null;
     this.toasted = null;
@@ -284,18 +270,12 @@ export default class Flow extends View {
     this.follow = true;
   }
 
-  /** Picks up where a closed or reloaded panel left off. Every step it takes is safe to repeat. */
   resume(cx) {
     const run = this.run;
     if (!run || !this.owner) return;
     if (run.status.kind === "executing" || (run.status.kind === "idle" && run.auto)) this.drive(cx);
   }
 
-  /**
-   * Changes the run and writes run.json, one change at a time, each against the latest run. The
-   * write is compare-and-swap with the text this panel last wrote: a refusal means another panel
-   * moved the run, so this one reloads it and stops driving.
-   */
   update(cx, change) {
     const step = this.queue.then(async () => {
       const run = this.run;
@@ -344,17 +324,14 @@ export default class Flow extends View {
     for (const resolve of this.waiters.splice(0)) resolve();
   }
 
-  /** Resolves at the next change to the run (or to who drives it). */
   changed() {
     return new Promise((resolve) => this.waiters.push(resolve));
   }
 
-  /** Resolves once the run is no longer executing this visit here, say because a person decided it. */
   async left(id, node, visit) {
     while (this.still(id, node, visit)) await this.changed();
   }
 
-  /** Runs the next step, then keeps going while the run is on auto. One loop per panel. */
   drive(cx) {
     if (this.busy) return;
     this.busy = true;
@@ -378,7 +355,6 @@ export default class Flow extends View {
             });
             if (!begun) break;
           } else if (this.run.status.kind === "executing") {
-            // Resuming: a write claims the run first, so two panels never both perform the step.
             if (!(await this.update(cx, (run) => ({ ...run })))) break;
             effect = pendingEffect(this.run);
           } else {
@@ -400,9 +376,6 @@ export default class Flow extends View {
     const visit = run.status.visit;
     const node = nodeOf(run.machine, effect.node);
     const env = Object.entries(effect.env).map(([key, value]) => `${key}=${value}`);
-    // -lic: tools such as npm are set up in the person's shell rc, as Herdr's agent launcher assumes.
-    // The command is one argv element ($1), never spliced into shell code. It merges stderr itself, so
-    // stdout holds its output; stderr only carries shell start-up noise.
     const running = exec(
       "/usr/bin/env",
       [...env, "/bin/sh", "-c", 'exec "${SHELL:-/bin/sh}" -lic "$1"', "flow", `exec 2>&1\n${effect.command}`],
@@ -416,7 +389,6 @@ export default class Flow extends View {
         await replaceFile(outputFile(id, node.id, visit), "error" in ran ? ran.error : ran.output).catch(() => {});
         return ran;
       });
-    // A person may decide the step while a hung command runs on; stop waiting for it then.
     const ran = await Promise.race([running, this.left(id, node.id, visit).then(() => null)]);
     if (!ran) return;
     const problem = commandProblem(ran);
@@ -428,7 +400,6 @@ export default class Flow extends View {
 
   async runAgent(cx, id, nodeId, visit) {
     const node = nodeOf(this.run.machine, nodeId);
-    // The paths always come from the run id, node and visit; run.json keeps a copy for people.
     const files = visitFiles(id, nodeId, visit);
     await exec("mkdir", ["-p", files.dir]);
     let handle = this.run.status.agent;
@@ -450,7 +421,6 @@ export default class Flow extends View {
       if (!this.still(id, nodeId, visit)) return;
       this.nameTab(cx, live.tab, `${node.label} #${visit}`);
     } else if (!this.sameVisit(this.startClock, id, nodeId, visit)) {
-      // A resumed run: the terminal's age is unknown, so the grace period starts now.
       this.startClock = { id, node: nodeId, visit, since: Date.now() };
     }
     this.watchStart(cx, id, node, visit, terminal);
@@ -461,12 +431,6 @@ export default class Flow extends View {
     return entry?.id === id && entry.node === node && entry.visit === visit;
   }
 
-  /**
-   * Render does not re-run as time passes, so one timer wakes it when the grace period ends. From
-   * then, while the terminal is live and its agent has reported nothing, it reads the screen every
-   * SCREEN_RECHECK_MS for a trust dialog and posts one toast per visit. It stops when the agent
-   * reports, the step changes or the terminal goes.
-   */
   watchStart(cx, id, node, visit, terminal) {
     const silent = () =>
       this.still(id, node.id, visit) &&
@@ -497,7 +461,6 @@ export default class Flow extends View {
     });
   }
 
-  /** A live terminal a crashed panel already started for this visit. */
   async findAgent(id, node, visit) {
     try {
       const listed = await hc(["ls", "--json", "--label", `flow.run=${id}`, "--label", `flow.node=${node}-${visit}`]);
@@ -526,7 +489,6 @@ export default class Flow extends View {
       ]);
       const address = started.code === 0 ? JSON.parse(started.stdout).address : null;
       if (address) return address;
-      // name_taken: another panel started this visit's agent a moment ago.
       const other = await this.findAgent(id, node.id, visit);
       if (other) return other;
       error = (started.stderr || started.stdout).trim() || `hc exited ${started.code}`;
@@ -545,7 +507,6 @@ export default class Flow extends View {
     });
   }
 
-  /** Completes the step and returns true when the agent's result file holds a valid result. */
   async collect(cx, id, node, visit, files) {
     const text = await readTextFile(files.resultPath);
     if (text == null) return false;
@@ -732,7 +693,6 @@ export default class Flow extends View {
     return createRun(this.machine, { id: "preview", space, folder: where.folder ?? "", inputs, now: Date.now() });
   }
 
-  /** How the executing agent is doing, from Herdr's live lists. Null unless an agent step runs. */
   agentState(run) {
     const status = run.status;
     if (status.kind !== "executing" || nodeOf(run.machine, status.node).kind !== "agent") return null;

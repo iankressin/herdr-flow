@@ -1,7 +1,3 @@
-/**
- * The boundary for an agent's result file. A "pass" must carry every `produces` key;
- * a "fail" may leave them out (they become ""), since a failed step often has nothing to hand on.
- */
 export function parseAgentResult(text, produces = []) {
     let raw;
     try {

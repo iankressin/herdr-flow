@@ -7,7 +7,6 @@ const GAP = 20;
 const PAD_X = 48;
 const PAD_Y = 16;
 const SPINE_X = 26;
-/** Pass edges from start first (the happy path), then other working nodes, then end nodes. */
 export function displayOrder(machine) {
     const order = [];
     let cursor = machine.start;

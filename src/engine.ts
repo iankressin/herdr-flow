@@ -27,21 +27,17 @@ export interface AgentHandle {
 export type RunStatus =
   | { kind: "idle"; next: string }
   | { kind: "executing"; node: string; visit: number; startedAt: number; agent?: AgentHandle }
-  /** `exhausted`: the node whose visit budget ran out, when that is why the run ended. */
   | { kind: "finished"; end: string; result: "success" | "failure"; note?: string; exhausted?: string }
-  /** Something around the step broke (a launch, a missing value). Not a "fail" outcome. */
   | { kind: "failed"; node: string; error: string };
 
 export interface Run {
   id: string;
-  /** A copy taken at start, so editing the machine file mid-run cannot break the run. */
   machine: Machine;
   space: { id: string; name: string };
   folder: string;
   inputs: Record<string, string>;
   auto: boolean;
   status: RunStatus;
-  /** Completed attempts per node. */
   visits: Record<string, number>;
   context: Record<string, string>;
   attempts: Attempt[];
@@ -50,7 +46,6 @@ export interface Run {
 }
 
 export type Effect =
-  /** `command` is filled from inputs only; step values travel in `env`, never in the shell text. */
   | { kind: "command"; node: string; command: string; env: Record<string, string>; timeoutSec: number }
   | { kind: "agent"; node: string; visit: number }
   | { kind: "none" };
@@ -71,11 +66,9 @@ export interface NewRun {
   now: number;
 }
 
-/** How much command output a step keeps as its value. */
 export const OUTPUT_TAIL = 8000;
 const SUMMARY_LINES = 8;
 
-/** Values for `{{key}}` in agent prompts. Inputs win over step values. */
 export function templateValues(run: Run): Record<string, string> {
   return { ...run.context, ...run.inputs };
 }
@@ -88,7 +81,6 @@ function isExhausted(run: Run, node: MachineNode): boolean {
   return node.maxVisits != null && (run.visits[node.id] ?? 0) >= node.maxVisits;
 }
 
-/** Moving onto a node: an end node or a spent budget finishes the run; anything else waits to begin. */
 function arrive(run: Run, target: string): Run {
   const node = nodeOf(run.machine, target);
   if (node.kind === "end") {
@@ -105,10 +97,6 @@ function arrive(run: Run, target: string): Run {
   };
 }
 
-/**
- * Whether `path` is `folder` or sits under it; pass both through realpath first. Flow refuses a run
- * folder that holds its own data folder, since agents can write where they work.
- */
 export function isInside(path: string, folder: string): boolean {
   const base = folder.replace(/\/+$/, "");
   return path === base || path.startsWith(`${base}/`);
@@ -132,7 +120,6 @@ export function createRun(machine: Machine, init: NewRun): Run {
   return arrive(run, machine.start);
 }
 
-/** What the shell must do for the node the run is executing; `none` otherwise. Resume calls this too. */
 export function pendingEffect(run: Run): Effect {
   if (run.status.kind !== "executing") return { kind: "none" };
   const node = nodeOf(run.machine, run.status.node);
@@ -182,7 +169,6 @@ export function attachAgent(run: Run, agent: AgentHandle): Run {
   return { ...run, status: { ...run.status, agent } };
 }
 
-/** Records an attempt at the executing node (or the failed one, when a person decides it) and follows its edge. */
 export function complete(run: Run, result: StepResult, now: number): Run {
   const status = run.status;
   if (status.kind !== "executing" && status.kind !== "failed") return run;
@@ -241,14 +227,12 @@ function tail(text: string): string {
   return text.length <= OUTPUT_TAIL ? text : `…${text.slice(-OUTPUT_TAIL)}`;
 }
 
-/** The shell could not run the command (126 not executable, 127 not found): an infrastructure fault, not a step outcome. */
 export function commandProblem(ran: { exitCode: number; output: string } | { error: string; output: string }): string | null {
   if ("error" in ran || (ran.exitCode !== 126 && ran.exitCode !== 127)) return null;
   const last = tail(ran.output.trimEnd()).split("\n").slice(-SUMMARY_LINES).join("\n");
   return `Command could not run (exit ${ran.exitCode})${last ? `: ${last}` : ""}`;
 }
 
-/** A finished command as a step result: exit 0 passes; the output tail goes under each `produces` key. */
 export function commandResult(
   node: ComputerNode,
   ran: { exitCode: number; output: string } | { error: string; output: string },

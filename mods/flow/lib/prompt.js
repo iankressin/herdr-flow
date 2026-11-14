@@ -1,6 +1,5 @@
 import { templateValues } from "./engine.js";
 import { fillTemplate, nodeOf, transitionFor } from "./machine.js";
-/** Nodes that reach `id` through `pass` edges, in machine order. */
 export function passAncestors(machine, id) {
     const seen = new Set();
     const queue = [id];
@@ -33,7 +32,6 @@ function consequence(machine, node, on) {
     const to = nodeOf(machine, edge.to).label;
     return `"${on}" sends the run to ${to}${edge.label ? ` (${edge.label})` : ""}.`;
 }
-/** The whole message an agent node starts with: its task, what earlier steps found, and how to report back. */
 export function buildAgentPrompt(run, nodeId, options) {
     const machine = run.machine;
     const node = nodeOf(machine, nodeId);
@@ -41,8 +39,6 @@ export function buildAgentPrompt(run, nodeId, options) {
         throw new Error(`${node.label} is not an agent step`);
     const visit = run.status.kind === "executing" && run.status.node === node.id ? run.status.visit : (run.visits[node.id] ?? 0) + 1;
     const values = templateValues(run);
-    // The prompt is the agent's first message, so it opens with a sentence: a leading "#", "/" or "!"
-    // means something else to an agent's input box.
     const out = [
         `You are the ${node.label} step of the Flow run "${machine.title}" (${run.id}). ` +
             `This is visit ${visit} of this step${node.maxVisits ? `, out of at most ${node.maxVisits}` : ""}. ` +

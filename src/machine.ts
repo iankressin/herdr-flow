@@ -52,28 +52,15 @@ export interface Machine {
   inputs: Input[];
   start: string;
   onExhausted?: string;
-  /** Argv prefix for agent nodes; `{visitDir}` is filled and the prompt goes last. */
   agent?: string[];
   nodes: MachineNode[];
   transitions: Transition[];
 }
 
-/**
- * The agent may write only its visit folder, which holds its prompt and result. run.json and
- * command outputs sit outside it, so an agent cannot change what the panel runs next.
- */
 export const DEFAULT_AGENT = ["claude", "--add-dir={visitDir}"];
-/**
- * What `hc run` executes for an agent: the person's login interactive shell, so tools set up in
- * their rc files (node, npm) are on PATH. The script is fixed text. `exec "$0" "$@"` replaces the
- * shell with the agent, whose argv and prompt arrive as separate elements and never become shell
- * text. The prompt goes last: Claude's `--add-dir` takes several values and would swallow a prompt
- * that followed it.
- */
 export function agentLaunchArgv(shell: string, agentArgv: string[], prompt: string): string[] {
   return [shell, "-lic", 'exec "$0" "$@"', ...agentArgv, prompt];
 }
-/** `exec` refuses timeouts above ten minutes. */
 export const MAX_TIMEOUT_SEC = 600;
 
 const KEY = /^[A-Za-z_][A-Za-z0-9_.-]*$/;
@@ -89,7 +76,6 @@ export function transitionFor(machine: Machine, from: string, on: Outcome): Tran
   return machine.transitions.find((edge) => edge.from === from && edge.on === on);
 }
 
-/** Replaces `{{key}}` with `values[key]`; unknown keys stay as written. */
 export function fillTemplate(text: string, values: Record<string, string>): string {
   return text.replace(PLACEHOLDER, (whole, key: string) => (key in values ? values[key]! : whole));
 }
@@ -102,7 +88,6 @@ export function missingKeys(text: string, values: Record<string, string>): strin
   return [...missing];
 }
 
-/** The environment variable a command reads a step value from: `diagnosis` is `FLOW_DIAGNOSIS`. */
 export function envName(key: string): string {
   return `FLOW_${key.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
 }
@@ -199,7 +184,6 @@ function parseTransition(raw: unknown, index: number, nodes: Map<string, Machine
   return { from, on: raw.on, to, label: optionalText(raw.label, `${where}.label`) };
 }
 
-/** The boundary for machine JSON: everything past here trusts the Machine type. */
 export function parseMachine(raw: unknown): Machine {
   if (!isRecord(raw)) throw new Error("A machine must be a JSON object");
   const id = text(raw.id, "id");
@@ -236,9 +220,7 @@ export function parseMachine(raw: unknown): Machine {
   if (onExhausted != null && byId.get(onExhausted)?.kind !== "end") {
     throw new Error(`onExhausted must name an end node, not ${onExhausted}`);
   }
-  // Step values come from agents, which may have read a hostile repo, so they never become shell
-  // text: a command's placeholders name only inputs (the person typed those), and no step may
-  // produce a value under an input's key.
+
   const inputKeys = Object.fromEntries(inputs.map((input) => [input.key, ""]));
   for (const node of nodes) {
     const shadow = node.produces?.find((key) => key in inputKeys);

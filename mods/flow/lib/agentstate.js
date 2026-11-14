@@ -1,6 +1,4 @@
-/** How long a live agent terminal may go without reporting a status before it counts as not started. */
 export const START_GRACE_MS = 15_000;
-/** How often the panel rereads a not-started terminal's screen. */
 export const SCREEN_RECHECK_MS = 10_000;
 const TRUST_DIALOG = /trust this folder/i;
 export function agentLook({ status, live, sinceMs, screen, error }) {
