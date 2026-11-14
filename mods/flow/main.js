@@ -384,12 +384,16 @@ export default class Flow extends View {
     const node = nodeOf(run.machine, effect.node);
     const env = Object.entries(effect.env).map(([key, value]) => `${key}=${value}`);
     // Step values travel as environment variables in argv; the shell text holds inputs only.
-    const running = exec("/usr/bin/env", [...env, "/bin/sh", "-c", `exec 2>&1\n${effect.command}`], {
-      cwd: run.folder,
-      timeout: effect.timeoutSec * 1000,
-    })
+    // -lic: tools such as npm are set up in the person's shell rc, as Herdr's agent launcher assumes.
+    // The command is one argv element ($1), never spliced into shell code. It merges stderr itself, so
+    // stdout holds its output; stderr only carries shell start-up noise.
+    const running = exec(
+      "/usr/bin/env",
+      [...env, "/bin/sh", "-c", 'exec "${SHELL:-/bin/sh}" -lic "$1"', "flow", `exec 2>&1\n${effect.command}`],
+      { cwd: run.folder, timeout: effect.timeoutSec * 1000 },
+    )
       .then(
-        (result) => ({ exitCode: result.code, output: `${result.stdout}${result.stderr}` }),
+        (result) => ({ exitCode: result.code, output: result.stdout || result.stderr }),
         (error) => ({ error: message(error), output: "" }),
       )
       .then(async (ran) => {
