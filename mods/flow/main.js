@@ -520,21 +520,19 @@ export default class Flow extends View {
   }
 
   async watchResult(cx, id, node, visit, files) {
-    let change = null;
+    let watch = null;
     while (this.still(id, node.id, visit)) {
+      watch ??= watchFolder(files.dir).then(
+        () => {
+          watch = null;
+        },
+        () =>
+          wait(cx, RECHECK_MS).then(() => {
+            watch = null;
+          }),
+      );
       if (await this.collect(cx, id, node, visit, files)) return;
-      if (!change) {
-        change = watchFolder(files.dir).then(
-          () => {
-            change = null;
-          },
-          () =>
-            wait(cx, RECHECK_MS).then(() => {
-              change = null;
-            }),
-        );
-      }
-      await Promise.race([change, wait(cx, RECHECK_MS), this.changed()]);
+      await Promise.race([watch, this.changed()]);
     }
   }
 
