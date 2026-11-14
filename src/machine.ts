@@ -190,6 +190,21 @@ function parseTransition(raw: unknown, index: number, nodes: Map<string, Machine
   return { from, on: raw.on, to, label: optionalText(raw.label, `${where}.label`) };
 }
 
+function rejectStepValuesInCommands(nodes: MachineNode[], inputs: Input[]): void {
+  const inputKeys = Object.fromEntries(inputs.map((input) => [input.key, ""]));
+  for (const node of nodes) {
+    const shadow = node.produces?.find((key) => key in inputKeys);
+    if (shadow) throw new Error(`Node ${node.id} produces "${shadow}", which is an input key; inputs cannot be overwritten`);
+    if (node.kind !== "computer") continue;
+    const stepKey = missingKeys(node.run, inputKeys)[0];
+    if (stepKey) {
+      throw new Error(
+        `Node ${node.id} run uses {{${stepKey}}}, but only inputs can fill a command; read a step value from $${envName(stepKey)} instead`,
+      );
+    }
+  }
+}
+
 export function parseMachine(raw: unknown): Machine {
   if (!isRecord(raw)) throw new Error("A machine must be a JSON object");
   const id = text(raw.id, "id");
@@ -227,18 +242,7 @@ export function parseMachine(raw: unknown): Machine {
     throw new Error(`onExhausted must name an end node, not ${onExhausted}`);
   }
 
-  const inputKeys = Object.fromEntries(inputs.map((input) => [input.key, ""]));
-  for (const node of nodes) {
-    const shadow = node.produces?.find((key) => key in inputKeys);
-    if (shadow) throw new Error(`Node ${node.id} produces "${shadow}", which is an input key; inputs cannot be overwritten`);
-    if (node.kind !== "computer") continue;
-    const stepKey = missingKeys(node.run, inputKeys)[0];
-    if (stepKey) {
-      throw new Error(
-        `Node ${node.id} run uses {{${stepKey}}}, but only inputs can fill a command; read a step value from $${envName(stepKey)} instead`,
-      );
-    }
-  }
+  rejectStepValuesInCommands(nodes, inputs);
 
   const limited = nodes.find((node) => node.maxVisits != null);
   if (limited && onExhausted == null) throw new Error(`Node ${limited.id} sets maxVisits, so the machine needs onExhausted`);
