@@ -12,6 +12,7 @@ import {
   focused,
   hc,
   home,
+  notify,
   readTextFile,
   run as command,
   spaces,
@@ -34,6 +35,7 @@ import {
   retry,
   setAuto,
 } from "./lib/engine.js";
+import { SCREEN_RECHECK_MS, START_GRACE_MS, agentLook } from "./lib/agentstate.js";
 import { fixFailingTest } from "./lib/example.js";
 import { layoutGraph } from "./lib/layout.js";
 import { DEFAULT_AGENT, nodeOf, parseMachine } from "./lib/machine.js";
@@ -197,6 +199,10 @@ export default class Flow extends View {
     this.waiters = [];
     this.startError = null;
     this.resultError = null;
+    // When this visit's terminal was started or adopted, its latest screen text, and the visit already toasted.
+    this.startClock = null;
+    this.screen = null;
+    this.toasted = null;
     this.selected = fixFailingTest.start;
     this.follow = true;
     this.note = "";
@@ -423,16 +429,68 @@ export default class Flow extends View {
       if (!this.still(id, nodeId, visit)) return;
       handle = fresh;
     }
-    if (!handle.terminal) {
+    let terminal = handle.terminal;
+    if (!terminal) {
       if (await this.collect(cx, id, node, visit, files)) return;
-      const terminal = (await this.findAgent(id, nodeId, visit)) ?? (await this.launch(cx, id, node, visit, handle.tab, files));
+      terminal = (await this.findAgent(id, nodeId, visit)) ?? (await this.launch(cx, id, node, visit, handle.tab, files));
       if (!terminal) return;
+      if (!this.still(id, nodeId, visit)) return;
+      this.startClock = { id, node: nodeId, visit, since: this.run.status.startedAt };
       const live = { ...handle, terminal };
       await this.update(cx, at(id, nodeId, visit, (run) => attachAgent(run, live)));
       if (!this.still(id, nodeId, visit)) return;
       this.nameTab(cx, live.tab, `${node.label} #${visit}`);
+    } else if (!this.sameVisit(this.startClock, id, nodeId, visit)) {
+      // A resumed run: the terminal's age is unknown, so the grace period starts now.
+      this.startClock = { id, node: nodeId, visit, since: Date.now() };
     }
+    this.watchStart(cx, id, node, visit, terminal);
     await this.watchResult(cx, id, node, visit, files);
+  }
+
+  sameVisit(entry, id, node, visit) {
+    return entry?.id === id && entry.node === node && entry.visit === visit;
+  }
+
+  /**
+   * Render does not re-run as time passes, so one timer wakes it when the grace period ends. From
+   * then, while the terminal is live and its agent has reported nothing, it reads the screen every
+   * SCREEN_RECHECK_MS for a trust dialog and posts one toast per visit. It stops when the agent
+   * reports, the step changes or the terminal goes.
+   */
+  watchStart(cx, id, node, visit, terminal) {
+    const silent = () =>
+      this.still(id, node.id, visit) &&
+      !agents().some((agent) => agent.address === terminal) &&
+      terminals().some((item) => item.address === terminal && item.state === "live");
+    cx.spawn(async (cx) => {
+      await wait(cx, Math.max(0, this.startClock.since + START_GRACE_MS - Date.now()));
+      while (silent()) {
+        let text = null;
+        try {
+          const read = await hc(["read", terminal, "--lines", "40"]);
+          if (read.code === 0) text = read.stdout;
+        } catch {
+          text = null;
+        }
+        if (!silent()) break;
+        this.screen = { id, node: node.id, visit, text };
+        const look = this.agentState(this.run);
+        const key = `${id}/${node.id}/${visit}`;
+        if (look?.notStarted && this.toasted !== key) {
+          this.toasted = key;
+          notify({
+            title: `Flow: ${node.label} needs you`,
+            body: look.text,
+            level: "warning",
+            action: { name: "tab.select", args: { id: this.run.status.agent.tab } },
+          });
+        }
+        cx.notify();
+        await wait(cx, SCREEN_RECHECK_MS);
+      }
+      cx.notify();
+    });
   }
 
   /** A live terminal a crashed panel already started for this visit. */
@@ -678,17 +736,16 @@ export default class Flow extends View {
     if (status.kind !== "executing" || nodeOf(run.machine, status.node).kind !== "agent") return null;
     const terminal = status.agent?.terminal;
     if (!terminal) return { text: "starting", spin: true };
-    const error =
-      this.resultError?.id === run.id && this.resultError.node === status.node && this.resultError.visit === status.visit
-        ? this.resultError.error
-        : null;
-    const agent = agents().find((item) => item.address === terminal);
-    if (agent?.status === "blocked") return { text: "needs you", blocked: true };
-    if (agent?.status === "working") return { text: "working", spin: true };
-    if (agent) return { text: error ? `bad result: ${error}` : "stopped without a result", stuck: true };
-    const live = terminals().find((item) => item.address === terminal);
-    if (!live || live.state !== "live") return { text: error ? `closed, bad result: ${error}` : "closed", stuck: true };
-    return { text: "starting", spin: true };
+    const clock = this.sameVisit(this.startClock, run.id, status.node, status.visit) ? this.startClock : null;
+    const screen = this.sameVisit(this.screen, run.id, status.node, status.visit) ? this.screen.text : null;
+    const error = this.sameVisit(this.resultError, run.id, status.node, status.visit) ? this.resultError.error : null;
+    return agentLook({
+      status: agents().find((item) => item.address === terminal)?.status ?? null,
+      live: terminals().some((item) => item.address === terminal && item.state === "live"),
+      sinceMs: clock ? Date.now() - clock.since : 0,
+      screen,
+      error,
+    });
   }
 
   render() {

@@ -138,6 +138,10 @@ An agent can write only its own visit folder. It cannot reach `run.json`, which 
 
 When the panel loads, it picks up the current run. It keeps watching a live agent, adopts an agent terminal that a closed panel started, or starts the agent again. It reruns a command that was running. Each visit's agent has a fixed `hc` terminal name, so herdr-core refuses a second agent for the same visit. Flow writes `run.json` with compare-and-swap. If another Flow panel changed the run, this panel reloads it and stops driving it. **Reload** takes it back.
 
+## Watch out
+
+- In a folder Claude has not seen, it asks to trust the folder before it reads the prompt. Flow shows "needs you" after 15 seconds and a toast; answer in the agent's tab (**Open agent**). Flow never answers for you.
+
 ## Develop
 
 Node 22 or newer runs the tests.
@@ -154,6 +158,7 @@ src/machine.ts     types, parseMachine, fillTemplate
 src/engine.ts      the run reducer: createRun, begin, complete, fail, retry, setAuto
 src/prompt.ts      buildAgentPrompt
 src/result.ts      parseAgentResult
+src/agentstate.ts  agentLook: starting, not started, trust dialog, or the agent's status
 src/layout.ts      card and pill positions
 src/example.ts     the fix-failing-test machine
 mods/flow/main.js  the panel: runs commands, starts agents, writes files, draws

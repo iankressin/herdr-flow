@@ -60,6 +60,7 @@ Card order follows `pass` edges from `start`, then the other working nodes, then
 
 ## Watch out
 
+- In a folder Claude has not seen, it asks to trust the folder before it reads the prompt, and Herdr reports no agent status yet. A live terminal silent for 15 seconds shows "needs you" with a toast, and the panel reads its screen (`hc read --lines 40`, every 10 seconds) to name the trust dialog. The person answers in the agent's tab; Flow never sends keys.
 - `herdr-app check` renders the first view and runs the body of a `cx.spawn`, but never fires timers. The panel starts its I/O from `cx.timer.after(0, …)` so the check writes nothing.
 - Claude's `--add-dir` takes several values. `--add-dir <dir> "<prompt>"` swallows the prompt and the agent sits empty. Use `--add-dir=<dir>` and put the prompt last.
 - The prompt is the agent's first message, so it starts with a sentence. A leading `#`, `/` or `!` means something else to an agent's input box.
