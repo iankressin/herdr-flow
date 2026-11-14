@@ -1,0 +1,11 @@
+{
+  "name": "herdr-flow",
+  "private": true,
+  "type": "module",
+  "description": "Herdr mod: visual state machines for agent workflows.",
+  "scripts": {
+    "emit": "node scripts/emit.mjs",
+    "test": "node --experimental-strip-types --test test/flow.test.ts",
+    "check": "node scripts/emit.mjs && node --experimental-strip-types --test test/flow.test.ts"
+  }
+}
