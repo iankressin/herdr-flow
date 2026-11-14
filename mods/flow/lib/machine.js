@@ -1,6 +1,10 @@
 export const DEFAULT_AGENT = ["claude", "--add-dir={visitDir}"];
+/** Herdr's `exec` and `hc run` do not load the person's shell rc, so tools set up there (npm from mise) were missing (exit 127) until they ran through `-lic`. */
 export function agentLaunchArgv(shell, agentArgv, prompt) {
     return [shell, "-lic", 'exec "$0" "$@"', ...agentArgv, prompt];
+}
+export function commandLaunchArgv(shell, env, command) {
+    return ["/usr/bin/env", ...Object.entries(env).map(([key, value]) => `${key}=${value}`), shell, "-lic", `exec 2>&1\n${command}`];
 }
 export const MAX_TIMEOUT_SEC = 600;
 const KEY = /^[A-Za-z_][A-Za-z0-9_.-]*$/;

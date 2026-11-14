@@ -34,7 +34,7 @@ import {
 import { SCREEN_RECHECK_MS, START_GRACE_MS, agentLook } from "./lib/agentstate.js";
 import { fixFailingTest } from "./lib/example.js";
 import { layoutGraph } from "./lib/layout.js";
-import { DEFAULT_AGENT, agentLaunchArgv, nodeOf, parseMachine } from "./lib/machine.js";
+import { DEFAULT_AGENT, agentLaunchArgv, commandLaunchArgv, nodeOf, parseMachine } from "./lib/machine.js";
 import { buildAgentPrompt } from "./lib/prompt.js";
 import { parseAgentResult } from "./lib/result.js";
 import { parseRun } from "./lib/runfile.js";
@@ -375,12 +375,8 @@ export default class Flow extends View {
     const run = this.run;
     const visit = run.status.visit;
     const node = nodeOf(run.machine, effect.node);
-    const env = Object.entries(effect.env).map(([key, value]) => `${key}=${value}`);
-    const running = exec(
-      "/usr/bin/env",
-      [...env, "/bin/sh", "-c", 'exec "${SHELL:-/bin/sh}" -lic "$1"', "flow", `exec 2>&1\n${effect.command}`],
-      { cwd: run.folder, timeout: effect.timeoutSec * 1000 },
-    )
+    const [program, ...args] = commandLaunchArgv(this.shell, effect.env, effect.command);
+    const running = exec(program, args, { cwd: run.folder, timeout: effect.timeoutSec * 1000 })
       .then(
         (result) => ({ exitCode: result.code, output: result.stdout || result.stderr }),
         (error) => ({ error: message(error), output: "" }),

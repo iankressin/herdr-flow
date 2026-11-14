@@ -7,7 +7,7 @@ import type { Run } from "../src/engine.ts";
 import { fixFailingTest } from "../src/example.ts";
 import { layoutGraph } from "../src/layout.ts";
 import type { ComputerNode, Machine, Outcome } from "../src/machine.ts";
-import { agentLaunchArgv, fillTemplate, nodeOf, parseMachine } from "../src/machine.ts";
+import { agentLaunchArgv, commandLaunchArgv, fillTemplate, nodeOf, parseMachine } from "../src/machine.ts";
 import { buildAgentPrompt } from "../src/prompt.ts";
 import { parseAgentResult } from "../src/result.ts";
 import { parseRun } from "../src/runfile.ts";
@@ -323,4 +323,13 @@ test("agentLaunchArgv keeps the prompt last and out of the shell script", () => 
   assert.equal(argv.filter((part) => part === prompt).length, 1);
   assert.ok(!argv[2].includes("touch"));
   assert.ok(argv.includes("--add-dir=/a b/visit"));
+});
+
+test("commandLaunchArgv keeps each env value and the command in one element", () => {
+  const value = 'x"; touch /tmp/p; "';
+  const command = 'echo "$A"; touch /tmp/q';
+  const argv = commandLaunchArgv("/bin/zsh", { A: value, B: "two words" }, command);
+  assert.deepEqual(argv, ["/usr/bin/env", `A=${value}`, "B=two words", "/bin/zsh", "-lic", `exec 2>&1\n${command}`]);
+  assert.deepEqual(argv.filter((part) => part.includes("touch /tmp/p")), [`A=${value}`]);
+  assert.equal(argv.filter((part) => part.includes("touch /tmp/q")).length, 1);
 });
