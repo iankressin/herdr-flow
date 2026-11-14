@@ -241,6 +241,13 @@ function tail(text: string): string {
   return text.length <= OUTPUT_TAIL ? text : `…${text.slice(-OUTPUT_TAIL)}`;
 }
 
+/** The shell could not run the command (126 not executable, 127 not found): an infrastructure fault, not a step outcome. */
+export function commandProblem(ran: { exitCode: number; output: string } | { error: string; output: string }): string | null {
+  if ("error" in ran || (ran.exitCode !== 126 && ran.exitCode !== 127)) return null;
+  const last = tail(ran.output.trimEnd()).split("\n").slice(-SUMMARY_LINES).join("\n");
+  return `Command could not run (exit ${ran.exitCode})${last ? `: ${last}` : ""}`;
+}
+
 /** A finished command as a step result: exit 0 passes; the output tail goes under each `produces` key. */
 export function commandResult(
   node: ComputerNode,

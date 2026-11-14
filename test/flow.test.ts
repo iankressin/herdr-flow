@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
 
-import { attachAgent, begin, commandResult, complete, createRun, fail, isInside, retry } from "../src/engine.ts";
+import { attachAgent, begin, commandProblem, commandResult, complete, createRun, fail, isInside, retry } from "../src/engine.ts";
 import type { Run } from "../src/engine.ts";
 import { fixFailingTest } from "../src/example.ts";
 import { layoutGraph } from "../src/layout.ts";
@@ -213,6 +213,26 @@ test("commandResult keeps the output tail under each produces key", () => {
   assert.ok(failed.values.verify_output!.length <= 8001);
   assert.match(failed.summary, /^Exit code 2\.\n[\s\S]*last line$/);
   assert.deepEqual(commandResult(verify, { error: "timed out", output: "" }).outcome, "fail");
+});
+
+test("a command that could not run fails the run instead of completing the step", () => {
+  const claim = nodeOf(machine, "claim") as ComputerNode;
+  const started = begin(newRun(), ++clock);
+  for (const exitCode of [126, 127]) {
+    const ran = { exitCode, output: "/bin/sh: line 1: npm: command not found\n" };
+    const problem = commandProblem(ran);
+    assert.equal(problem, `Command could not run (exit ${exitCode}): /bin/sh: line 1: npm: command not found`);
+    const run = fail(started.run, problem!);
+    assert.deepEqual(run.status, { kind: "failed", node: "claim", error: problem });
+    assert.equal(run.attempts.length, 0);
+    assert.deepEqual(run.visits, started.run.visits);
+  }
+  assert.equal(commandProblem({ exitCode: 1, output: "1 failing" }), null);
+  assert.equal(commandProblem({ exitCode: 0, output: "" }), null);
+  assert.equal(commandProblem({ error: "timed out", output: "" }), null);
+  const run = complete(started.run, commandResult(claim, { exitCode: 1, output: "1 failing" }), ++clock);
+  assert.equal(run.attempts.at(-1)!.outcome, "fail");
+  assert.notEqual(run.status.kind, "failed");
 });
 
 test("the fix prompt on a revisit carries the diagnosis, the latest verify output and the result contract", () => {

@@ -23,6 +23,7 @@ import {
 import {
   attachAgent,
   begin,
+  commandProblem,
   commandResult,
   complete,
   createRun,
@@ -402,7 +403,12 @@ export default class Flow extends View {
       });
     // A person may decide the step while a hung command runs on; stop waiting for it then.
     const ran = await Promise.race([running, this.left(id, node.id, visit).then(() => null)]);
-    if (ran) await this.update(cx, at(id, node.id, visit, (current) => complete(current, commandResult(node, ran), Date.now())));
+    if (!ran) return;
+    const problem = commandProblem(ran);
+    await this.update(
+      cx,
+      at(id, node.id, visit, (current) => (problem ? fail(current, problem) : complete(current, commandResult(node, ran), Date.now()))),
+    );
   }
 
   async runAgent(cx, id, nodeId, visit) {
