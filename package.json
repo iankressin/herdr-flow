@@ -6,9 +6,10 @@
   "scripts": {
     "emit": "node scripts/emit.mjs",
     "test": "node --experimental-strip-types --test test/flow.test.ts",
-    "check": "node scripts/emit.mjs && node --experimental-strip-types --test test/flow.test.ts"
+    "check": "tsc -p . && node scripts/emit.mjs && node --experimental-strip-types --test test/flow.test.ts"
   },
   "devDependencies": {
+    "@types/node": "22.20.5",
     "typescript": "5.9.3"
   }
 }

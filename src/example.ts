@@ -1,186 +1,127 @@
-import type { Machine, MachineNode, ProduceResult, RunState } from "./types.ts";
-import type { StepOptions } from "./runner.ts";
+import type { Machine } from "./machine.ts";
 
 const FILE = "src/example.ts";
 
 /**
- * Fix a failing test.
- * claim → search → diagnose → fix → verify → judge → done
- * fix loops while retries < 5. verify can return to fix, or the run gives up.
+ * claim runs the test. If it already passes, the run ends. Otherwise search, diagnose and fix,
+ * then verify runs the test again: a failure goes back to fix (at most five fixes), a pass goes to
+ * judge, which reviews the diff before the run ends at done.
  */
-export function fixFailingTest(): Machine {
-  return {
-    id: "fix-failing-test",
-    nodes: [
-      {
-        id: "claim",
-        kind: "computer",
-        label: "Claim",
-        promptOrDescription:
-          "Claim the failing test. Record the file, the assertion, and the exact command that reproduces it. Do not edit code yet.",
-        source: { file: FILE, line: 16 },
-        produces: ["claim"],
-      },
-      {
-        id: "search",
-        kind: "agent",
-        label: "Search",
-        promptOrDescription:
-          "Search the repo for the code behind the failing assertion. Report the functions and files that can produce the bad value. Do not patch yet.",
-        source: { file: FILE, line: 25 },
-        requires: ["claim"],
-        produces: ["findings"],
-      },
-      {
-        id: "diagnose",
-        kind: "agent",
-        label: "Diagnose",
-        promptOrDescription:
-          "From the search findings, name the root cause in one paragraph and the smallest change that would make the test pass.",
-        source: { file: FILE, line: 35 },
-        requires: ["findings"],
-        produces: ["diagnosis"],
-      },
-      {
-        id: "fix",
-        kind: "agent",
-        label: "Fix",
-        promptOrDescription:
-          "Apply the diagnosis as a minimal patch. Stay inside the files the diagnosis named. Do not weaken the test.",
-        source: { file: FILE, line: 45 },
-        requires: ["diagnosis"],
-        produces: ["patch"],
-      },
-      {
-        id: "verify",
-        kind: "computer",
-        label: "Verify",
-        promptOrDescription:
-          "Run the claimed test command. Record pass or fail and the relevant assertion output. Do not edit code.",
-        source: { file: FILE, line: 55 },
-        requires: ["patch"],
-        produces: ["test-result"],
-      },
-      {
-        id: "judge",
-        kind: "agent",
-        label: "Judge",
-        promptOrDescription:
-          "Read the test result. Accept only a real pass of the original assertion. Otherwise say the run should stop.",
-        source: { file: FILE, line: 65 },
-        requires: ["test-result"],
-        produces: ["verdict"],
-      },
-      {
-        id: "done",
-        kind: "computer",
-        label: "Done",
-        promptOrDescription: "The original test passes. Stop. Summarize the patch in two sentences.",
-        source: { file: FILE, line: 75 },
-        requires: ["verdict"],
-      },
-      {
-        id: "gave-up",
-        kind: "computer",
-        label: "Gave up",
-        promptOrDescription:
-          "Stop without a green test. State which exit fired and what is still wrong. Do not keep editing.",
-        source: { file: FILE, line: 83 },
-      },
-    ],
-    transitions: [
-      { from: "claim", to: "search" },
-      { from: "search", to: "diagnose" },
-      { from: "diagnose", to: "fix" },
-      { from: "fix", to: "fix", label: "retries < 5", isLoop: true },
-      { from: "fix", to: "verify" },
-      { from: "verify", to: "judge", label: "tests pass" },
-      { from: "verify", to: "fix", label: "tests still failing", isError: true },
-      { from: "judge", to: "done", label: "accept" },
-      { from: "judge", to: "gave-up", label: "reject", isError: true },
-    ],
-    errorExits: [
-      { id: "max-retries", label: "max retries exceeded", from: "fix" },
-      { id: "still-failing", label: "tests still failing", from: "verify" },
-    ],
-  };
-}
-
-export function simulateFixFailingTest(
-  node: MachineNode,
-  run: RunState,
-  options: StepOptions,
-): ProduceResult {
-  const failures = options.failuresBeforePass ?? 1;
-  switch (node.id) {
-    case "claim":
-      return {
-        output:
-          "Claimed checkout.test.ts: refund drops one cent. Command: npm test -- checkout.test.ts",
-        values: { claim: "checkout.test.ts refund drops one cent" },
-        hint: "ok",
-      };
-    case "search":
-      return {
-        output:
-          "Searched refund and money helpers. applyRefund mixes a float dollar amount with integer cents.",
-        values: { findings: "applyRefund mixes float dollars with integer cents" },
-        hint: "ok",
-      };
-    case "diagnose":
-      return {
-        output:
-          "Root cause: applyRefund subtracts a float from integer cents, so checkout.test.ts fails by 1.",
-        values: { diagnosis: "coerce applyRefund to integer cents before subtracting" },
-        hint: "ok",
-      };
-    case "fix": {
-      const attempt = run.visits.fix ?? 1;
-      return {
-        output: `Patch attempt ${attempt}: coerce the refund to integer cents before subtracting.`,
-        values: { patch: `attempt ${attempt}: integer cents` },
-        hint: "ok",
-      };
-    }
-    case "verify": {
-      const attempts = run.visits.fix ?? 0;
-      if (attempts <= failures) {
-        return {
-          output: `FAIL checkout.test.ts — refund still off by 1 cent (attempt ${attempts}).`,
-          values: { "test-result": `FAIL attempt ${attempts}` },
-          hint: "error",
-        };
-      }
-      return {
-        output: "PASS checkout.test.ts (12 tests).",
-        values: { "test-result": "PASS" },
-        hint: "ok",
-      };
-    }
-    case "judge": {
-      const result = run.context["test-result"] ?? "";
-      if (result.startsWith("PASS")) {
-        return {
-          output: "Verdict: the original assertion passes. Accept.",
-          values: { verdict: "accept" },
-          hint: "ok",
-        };
-      }
-      return {
-        output: "Verdict: the original assertion still fails. Reject.",
-        values: { verdict: "reject" },
-        hint: "give-up",
-      };
-    }
-    case "done":
-      return { output: "Exit: done. The refund test passes.", values: {}, hint: "ok" };
-    case "gave-up":
-      return {
-        output: "Exit: gave up. The test is still red or the retry budget is spent.",
-        values: {},
-        hint: "ok",
-      };
-    default:
-      return { output: node.promptOrDescription, values: {}, hint: "ok" };
-  }
-}
+export const fixFailingTest: Machine = {
+  id: "fix-failing-test",
+  title: "Fix failing test",
+  inputs: [{ key: "test_command", label: "Test command that fails now" }],
+  start: "claim",
+  onExhausted: "gave-up",
+  nodes: [
+    {
+      id: "claim",
+      kind: "computer",
+      label: "Claim",
+      source: { file: FILE, line: 18 },
+      run: "{{test_command}}",
+      produces: ["failure"],
+    },
+    {
+      id: "search",
+      kind: "agent",
+      label: "Search",
+      source: { file: FILE, line: 26 },
+      requires: ["failure"],
+      produces: ["findings"],
+      prompt:
+        "The test command `{{test_command}}` fails; its output is under `failure` below. " +
+        "Find the code behind the failing assertion: the test, the functions it calls, and the files that can produce the wrong value. " +
+        "Read only: do not create, edit or delete any file. " +
+        "In findings, list each relevant file and function with one line on why it matters. " +
+        'Use "fail" only if you cannot find the code under test.',
+    },
+    {
+      id: "diagnose",
+      kind: "agent",
+      label: "Diagnose",
+      source: { file: FILE, line: 40 },
+      requires: ["failure", "findings"],
+      produces: ["diagnosis"],
+      prompt:
+        "From the failing output and the search findings, name the root cause in one paragraph, " +
+        "then the smallest change to the code under test that would make `{{test_command}}` pass. " +
+        "Do not edit files. Put both in diagnosis. " +
+        'Use "fail" if the evidence does not point at one cause.',
+    },
+    {
+      id: "fix",
+      kind: "agent",
+      label: "Fix",
+      source: { file: FILE, line: 53 },
+      maxVisits: 5,
+      requires: ["diagnosis"],
+      produces: ["patch"],
+      prompt:
+        "Apply the diagnosis as the smallest change that makes `{{test_command}}` pass. " +
+        "Change the code under test, not the test: do not weaken, skip or delete assertions, and do not change the test command. " +
+        "Run the test command to check your change. " +
+        "In patch, list each file you changed and what changed in it. " +
+        'Use "fail" only if you cannot make a change you believe in.',
+    },
+    {
+      id: "verify",
+      kind: "computer",
+      label: "Verify",
+      source: { file: FILE, line: 68 },
+      requires: ["patch"],
+      run: "{{test_command}}",
+      produces: ["verify_output"],
+    },
+    {
+      id: "judge",
+      kind: "agent",
+      label: "Judge",
+      source: { file: FILE, line: 77 },
+      requires: ["diagnosis", "verify_output"],
+      produces: ["verdict"],
+      prompt:
+        "`{{test_command}}` passes now. Review the change with `git diff` and `git status` against the diagnosis and the passing output below. " +
+        "Pass only if the change fixes the root cause in the code under test, stays small, and does not weaken, skip or delete any test. " +
+        "Do not edit files. Say why in verdict.",
+    },
+    {
+      id: "already-passing",
+      kind: "end",
+      label: "Already passing",
+      source: { file: FILE, line: 89 },
+      result: "success",
+      description: "Nothing to fix",
+    },
+    {
+      id: "done",
+      kind: "end",
+      label: "Done",
+      source: { file: FILE, line: 97 },
+      result: "success",
+      description: "The test passes and the judge accepted the change",
+    },
+    {
+      id: "gave-up",
+      kind: "end",
+      label: "Gave up",
+      source: { file: FILE, line: 105 },
+      result: "failure",
+      description: "Flow stopped without an accepted fix",
+    },
+  ],
+  transitions: [
+    { from: "claim", on: "pass", to: "already-passing" },
+    { from: "claim", on: "fail", to: "search" },
+    { from: "search", on: "pass", to: "diagnose" },
+    { from: "search", on: "fail", to: "gave-up" },
+    { from: "diagnose", on: "pass", to: "fix" },
+    { from: "diagnose", on: "fail", to: "gave-up" },
+    { from: "fix", on: "pass", to: "verify" },
+    { from: "fix", on: "fail", to: "gave-up" },
+    { from: "verify", on: "pass", to: "judge", label: "tests pass" },
+    { from: "verify", on: "fail", to: "fix", label: "tests still failing" },
+    { from: "judge", on: "pass", to: "done", label: "accept" },
+    { from: "judge", on: "fail", to: "gave-up", label: "reject" },
+  ],
+};

@@ -1,69 +1,112 @@
-import type { Machine, RunState } from "./types.ts";
-import { ancestors, nodeById } from "./graph.ts";
+import type { Attempt, Run } from "./engine.ts";
+import { templateValues } from "./engine.ts";
+import type { Machine, Outcome } from "./machine.ts";
+import { fillTemplate, nodeOf, transitionFor } from "./machine.ts";
 
-export interface FocusedPrompt {
-  markdown: string;
-  missing: string[];
+/** Nodes that reach `id` through `pass` edges, in machine order. */
+export function passAncestors(machine: Machine, id: string): string[] {
+  const seen = new Set<string>();
+  const queue = [id];
+  while (queue.length) {
+    const current = queue.shift()!;
+    for (const edge of machine.transitions) {
+      if (edge.on === "pass" && edge.to === current && edge.from !== id && !seen.has(edge.from)) {
+        seen.add(edge.from);
+        queue.push(edge.from);
+      }
+    }
+  }
+  return machine.nodes.map((node) => node.id).filter((nodeId) => seen.has(nodeId));
 }
 
-function lastOutput(run: RunState, id: string): string | null {
-  for (let i = run.log.length - 1; i >= 0; i--) {
-    const entry = run.log[i];
-    if (entry && entry.nodeId === id) return entry.output;
-  }
-  return null;
+function fence(text: string): string {
+  const longest = Math.max(2, ...[...text.matchAll(/`+/g)].map((match) => match[0].length));
+  const bar = "`".repeat(longest + 1);
+  return `${bar}\n${text}\n${bar}`;
 }
 
-export function buildFocusedPrompt(machine: Machine, run: RunState, nodeId: string): FocusedPrompt {
-  const node = nodeById(machine, nodeId);
-  if (!node) {
-    return {
-      markdown: `# Focused prompt\n\nUnknown node \`${nodeId}\`.\n`,
-      missing: [],
-    };
-  }
+function lastWhere(attempts: Attempt[], test: (attempt: Attempt) => boolean): Attempt | undefined {
+  for (let i = attempts.length - 1; i >= 0; i--) if (test(attempts[i]!)) return attempts[i];
+  return undefined;
+}
 
-  const prior = new Set<string>([...ancestors(machine, nodeId), ...run.completed]);
-  prior.delete(nodeId);
-  const ordered = machine.nodes.map((item) => item.id).filter((id) => prior.has(id));
+function consequence(machine: Machine, node: string, on: Outcome): string {
+  const edge = transitionFor(machine, node, on);
+  if (!edge) return `"${on}" has no next step; the run stops for a person.`;
+  const to = nodeOf(machine, edge.to).label;
+  return `"${on}" sends the run to ${to}${edge.label ? ` (${edge.label})` : ""}.`;
+}
 
-  const lines: string[] = [
-    `# Focused prompt — ${node.label}`,
+/** The whole message an agent node starts with: its task, what earlier steps found, and how to report back. */
+export function buildAgentPrompt(run: Run, nodeId: string, options: { resultPath: string }): string {
+  const machine = run.machine;
+  const node = nodeOf(machine, nodeId);
+  if (node.kind !== "agent") throw new Error(`${node.label} is not an agent step`);
+  const visit =
+    run.status.kind === "executing" && run.status.node === node.id ? run.status.visit : (run.visits[node.id] ?? 0) + 1;
+  const values = templateValues(run);
+  const out: string[] = [
+    `# ${node.label}`,
     "",
-    `Node: \`${node.id}\` (${node.kind})`,
+    `You are one step of the Flow run "${machine.title}" (${run.id}). ` +
+      `This is visit ${visit} of this step${node.maxVisits ? `, out of at most ${node.maxVisits}` : ""}. ` +
+      `Work in ${run.folder}.`,
+    "",
+    "## Task",
+    "",
+    fillTemplate(node.prompt, values),
   ];
-  if (node.source) {
-    lines.push(`Source: ${node.source.file}:${node.source.line}`);
-  }
-  lines.push("", "## Task", node.promptOrDescription, "", "## Context from prior steps");
 
-  if (!ordered.length) {
-    lines.push("No prior steps.");
+  if (machine.inputs.length) {
+    out.push("", "## Inputs", "");
+    for (const input of machine.inputs) out.push(`- ${input.label} (\`${input.key}\`): ${run.inputs[input.key] ?? "(not set)"}`);
   }
 
-  for (const id of ordered) {
-    const priorNode = nodeById(machine, id);
-    if (!priorNode) continue;
-    const output = lastOutput(run, id);
-    const ran = output != null;
-    lines.push(
-      "",
-      ran
-        ? `### ${priorNode.label} (\`${priorNode.id}\`, ${priorNode.kind})`
-        : `### ${priorNode.label} (\`${priorNode.id}\`, ${priorNode.kind}) — not yet run`,
-    );
-    lines.push(ran ? output : priorNode.promptOrDescription);
+  out.push("", "## Context from prior steps");
+  const before = out.length;
+  for (const key of node.requires ?? []) {
+    out.push("", `### ${key}`, "", key in values ? fence(values[key]!) : "Not set yet.");
+  }
+  for (const id of passAncestors(machine, node.id)) {
+    const attempt = lastWhere(run.attempts, (item) => item.node === id);
+    if (!attempt) continue;
+    out.push("", `### ${nodeOf(machine, id).label}: ${attempt.outcome} (attempt ${attempt.visit})`, "", attempt.summary);
+  }
+  if (out.length === before) out.push("", "Nothing ran before this step.");
+
+  const mine = run.attempts.filter((attempt) => attempt.node === node.id);
+  if (mine.length) {
+    out.push("", "## Earlier attempts at this step");
+    for (const attempt of mine) out.push("", `### Attempt ${attempt.visit}: ${attempt.outcome}`, "", attempt.summary);
+    const after = run.attempts.slice(run.attempts.lastIndexOf(mine[mine.length - 1]!) + 1);
+    const sender = lastWhere(after, (attempt) => transitionFor(machine, attempt.node, attempt.outcome)?.to === node.id);
+    if (sender) {
+      out.push(
+        "",
+        "## Why you are here again",
+        "",
+        `${nodeOf(machine, sender.node).label} ended "${sender.outcome}" on attempt ${sender.visit}:`,
+        "",
+        sender.summary,
+      );
+      for (const [key, value] of Object.entries(sender.values)) out.push("", `### ${key}`, "", fence(value));
+    }
   }
 
-  const missing = (node.requires ?? []).filter((key) => run.context[key] == null || run.context[key] === "");
-  if (missing.length) {
-    lines.push(
-      "",
-      "## Warning",
-      `Required values not yet produced: ${missing.join(", ")}.`,
-    );
-  }
-
-  lines.push("");
-  return { markdown: lines.join("\n"), missing };
+  const produced = (node.produces ?? []).map((key) => `"${key}":"<string>"`).join(",");
+  out.push(
+    "",
+    "## When you finish",
+    "",
+    `Write exactly one JSON object to \`${options.resultPath}\`:`,
+    "",
+    fence(`{"outcome":"pass"|"fail","summary":"<2-5 sentences>","values":{${produced}}}`),
+    "",
+    `- ${consequence(machine, node.id, "pass")}`,
+    `- ${consequence(machine, node.id, "fail")}`,
+    `- Give one string for each key in values${node.produces?.length ? "" : " (this step has none, so use {})"}.`,
+    "- Write this file last, after the work is done. Then stop: Flow moves on when the file appears.",
+    "",
+  );
+  return out.join("\n");
 }
