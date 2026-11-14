@@ -88,6 +88,11 @@ export function missingKeys(text: string, values: Record<string, string>): strin
   return [...missing];
 }
 
+/** The environment variable a command reads a step value from: `diagnosis` is `FLOW_DIAGNOSIS`. */
+export function envName(key: string): string {
+  return `FLOW_${key.toUpperCase().replace(/[^A-Z0-9]/g, "_")}`;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -217,6 +222,22 @@ export function parseMachine(raw: unknown): Machine {
   if (onExhausted != null && byId.get(onExhausted)?.kind !== "end") {
     throw new Error(`onExhausted must name an end node, not ${onExhausted}`);
   }
+  // Step values come from agents, which may have read a hostile repo, so they never become shell
+  // text: a command's placeholders name only inputs (the person typed those), and no step may
+  // produce a value under an input's key.
+  const inputKeys = Object.fromEntries(inputs.map((input) => [input.key, ""]));
+  for (const node of nodes) {
+    const shadow = node.produces?.find((key) => key in inputKeys);
+    if (shadow) throw new Error(`Node ${node.id} produces "${shadow}", which is an input key; inputs cannot be overwritten`);
+    if (node.kind !== "computer") continue;
+    const stepKey = missingKeys(node.run, inputKeys)[0];
+    if (stepKey) {
+      throw new Error(
+        `Node ${node.id} run uses {{${stepKey}}}, but only inputs can fill a command; read a step value from $${envName(stepKey)} instead`,
+      );
+    }
+  }
+
   const limited = nodes.find((node) => node.maxVisits != null);
   if (limited && onExhausted == null) throw new Error(`Node ${limited.id} sets maxVisits, so the machine needs onExhausted`);
 

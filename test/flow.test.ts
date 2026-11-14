@@ -115,17 +115,52 @@ test("five verify failures exhaust fix and end at gave-up", () => {
   assert.equal(begin(run, ++clock).effect.kind, "none");
 });
 
-test("a computer node runs its filled command", () => {
+test("a computer node runs its command filled from inputs", () => {
   const started = begin(newRun(), ++clock);
-  assert.deepEqual(started.effect, { kind: "command", node: "claim", command: "npm test -- money", timeoutSec: 600 });
+  assert.deepEqual(started.effect, { kind: "command", node: "claim", command: "npm test -- money", env: {}, timeoutSec: 600 });
 });
 
-test("a command with an unset placeholder fails the run instead of running", () => {
+test("step values reach a command only as FLOW_ environment variables", () => {
+  const hostile = 'x"; touch /tmp/pwned; "';
+  let run = play(newRun(), [["claim", "fail"], ["search", "pass"], ["diagnose", "pass"]]);
+  run = begin(run, ++clock).run;
+  run = complete(run, { outcome: "pass", summary: "Patched.", values: { patch: hostile }, by: "agent" }, ++clock);
+  const { effect } = begin(run, ++clock);
+  assert.equal(effect.kind, "command");
+  if (effect.kind !== "command") return;
+  assert.equal(effect.command, "npm test -- money");
+  assert.ok(!effect.command.includes("pwned"));
+  assert.equal(effect.env.FLOW_PATCH, hostile);
+  assert.equal(effect.env.FLOW_VERIFY_OUTPUT, undefined);
+});
+
+test("parseMachine keeps step values out of command text and off input keys", () => {
   const raw = rawExample();
+  (raw.nodes as { id: string; run?: string }[])[4]!.run = "echo {{diagnosis}}";
+  assert.throws(() => parseMachine(raw), /verify run uses \{\{diagnosis\}\}, but only inputs can fill a command; read a step value from \$FLOW_DIAGNOSIS/);
+
+  const shadow = rawExample();
+  (shadow.nodes as { id: string; produces?: string[] }[])[3]!.produces = ["patch", "test_command"];
+  assert.throws(() => parseMachine(shadow), /fix produces "test_command", which is an input key/);
+});
+
+test("a step value under an input's key cannot override the input", () => {
+  let run = play(newRun(), [["claim", "fail"]]);
+  const values = { findings: "money.ts", test_command: "rm -rf ~" };
+  run = complete(begin(run, ++clock).run, { outcome: "pass", summary: "Found it.", values, by: "agent" }, ++clock);
+  const prompt = buildAgentPrompt(begin(run, ++clock).run, "diagnose", { resultPath: "/r" });
+  assert.match(prompt, /would make `npm test -- money` pass/);
+  assert.match(prompt, /Test command that fails now \(`test_command`\): npm test -- money/);
+  assert.doesNotMatch(prompt, /rm -rf/);
+});
+
+test("a command whose input is unset fails the run instead of running", () => {
+  const raw = rawExample();
+  raw.inputs = [...(raw.inputs as object[]), { key: "shard", label: "Shard" }];
   (raw.nodes as { id: string; run?: string }[])[0]!.run = "{{test_command}} {{shard}}";
   const started = begin(newRun(parseMachine(raw)), ++clock);
   assert.equal(started.effect.kind, "none");
-  assert.deepEqual(started.run.status, { kind: "failed", node: "claim", error: "Claim needs {{shard}}, which no input or earlier step set" });
+  assert.deepEqual(started.run.status, { kind: "failed", node: "claim", error: "Claim needs {{shard}}, which no input set" });
 });
 
 test("a person can decide a failed step, and retry runs it again", () => {
@@ -161,7 +196,7 @@ test("the fix prompt on a revisit carries the diagnosis, the latest verify outpu
   ]);
   run = begin(run, ++clock).run;
   const prompt = buildAgentPrompt(run, "fix", { resultPath: "/runs/run-1/fix-2.result.json" });
-  assert.match(prompt, /This is visit 2 of this step, out of at most 5/);
+  assert.match(prompt, /^You are the Fix step of the Flow run "Fix failing test" \(run-1\)\. This is visit 2 of this step, out of at most 5\./);
   assert.match(prompt, /diagnosis value 1/);
   assert.match(prompt, /Verify ended "fail" on attempt 1/);
   assert.match(prompt, /verify output 1/);

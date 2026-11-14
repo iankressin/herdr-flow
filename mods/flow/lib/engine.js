@@ -1,9 +1,13 @@
-import { MAX_TIMEOUT_SEC, fillTemplate, missingKeys, nodeOf, transitionFor } from "./machine.js";
+import { MAX_TIMEOUT_SEC, envName, fillTemplate, missingKeys, nodeOf, transitionFor } from "./machine.js";
 /** How much command output a step keeps as its value. */
 export const OUTPUT_TAIL = 8000;
 const SUMMARY_LINES = 8;
+/** Values for `{{key}}` in agent prompts. Inputs win over step values. */
 export function templateValues(run) {
-    return { ...run.inputs, ...run.context };
+    return { ...run.context, ...run.inputs };
+}
+export function commandEnv(run) {
+    return Object.fromEntries(Object.entries(run.context).map(([key, value]) => [envName(key), value]));
 }
 function isExhausted(run, node) {
     return node.maxVisits != null && (run.visits[node.id] ?? 0) >= node.maxVisits;
@@ -52,7 +56,8 @@ export function pendingEffect(run) {
             return {
                 kind: "command",
                 node: node.id,
-                command: fillTemplate(node.run, templateValues(run)),
+                command: fillTemplate(node.run, run.inputs),
+                env: commandEnv(run),
                 timeoutSec: node.timeoutSec ?? MAX_TIMEOUT_SEC,
             };
         case "agent":
@@ -68,11 +73,11 @@ export function begin(run, now) {
     if (node.kind === "end" || isExhausted(run, node))
         return { run: arrive(run, node.id), effect: { kind: "none" } };
     if (node.kind === "computer") {
-        const missing = missingKeys(node.run, templateValues(run));
+        const missing = missingKeys(node.run, run.inputs);
         if (missing.length) {
             const names = missing.map((key) => `{{${key}}}`).join(", ");
             return {
-                run: { ...run, status: { kind: "failed", node: node.id, error: `${node.label} needs ${names}, which no input or earlier step set` } },
+                run: { ...run, status: { kind: "failed", node: node.id, error: `${node.label} needs ${names}, which no input set` } },
                 effect: { kind: "none" },
             };
         }

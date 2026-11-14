@@ -1,5 +1,5 @@
 import type { ComputerNode, Machine, MachineNode, Outcome } from "./machine.ts";
-import { MAX_TIMEOUT_SEC, fillTemplate, missingKeys, nodeOf, transitionFor } from "./machine.ts";
+import { MAX_TIMEOUT_SEC, envName, fillTemplate, missingKeys, nodeOf, transitionFor } from "./machine.ts";
 
 export type By = "computer" | "agent" | "person";
 
@@ -50,7 +50,8 @@ export interface Run {
 }
 
 export type Effect =
-  | { kind: "command"; node: string; command: string; timeoutSec: number }
+  /** `command` is filled from inputs only; step values travel in `env`, never in the shell text. */
+  | { kind: "command"; node: string; command: string; env: Record<string, string>; timeoutSec: number }
   | { kind: "agent"; node: string; visit: number }
   | { kind: "none" };
 
@@ -74,8 +75,13 @@ export interface NewRun {
 export const OUTPUT_TAIL = 8000;
 const SUMMARY_LINES = 8;
 
+/** Values for `{{key}}` in agent prompts. Inputs win over step values. */
 export function templateValues(run: Run): Record<string, string> {
-  return { ...run.inputs, ...run.context };
+  return { ...run.context, ...run.inputs };
+}
+
+export function commandEnv(run: Run): Record<string, string> {
+  return Object.fromEntries(Object.entries(run.context).map(([key, value]) => [envName(key), value]));
 }
 
 function isExhausted(run: Run, node: MachineNode): boolean {
@@ -126,7 +132,8 @@ export function pendingEffect(run: Run): Effect {
       return {
         kind: "command",
         node: node.id,
-        command: fillTemplate(node.run, templateValues(run)),
+        command: fillTemplate(node.run, run.inputs),
+        env: commandEnv(run),
         timeoutSec: node.timeoutSec ?? MAX_TIMEOUT_SEC,
       };
     case "agent":
@@ -141,11 +148,11 @@ export function begin(run: Run, now: number): { run: Run; effect: Effect } {
   const node = nodeOf(run.machine, run.status.next);
   if (node.kind === "end" || isExhausted(run, node)) return { run: arrive(run, node.id), effect: { kind: "none" } };
   if (node.kind === "computer") {
-    const missing = missingKeys(node.run, templateValues(run));
+    const missing = missingKeys(node.run, run.inputs);
     if (missing.length) {
       const names = missing.map((key) => `{{${key}}}`).join(", ");
       return {
-        run: { ...run, status: { kind: "failed", node: node.id, error: `${node.label} needs ${names}, which no input or earlier step set` } },
+        run: { ...run, status: { kind: "failed", node: node.id, error: `${node.label} needs ${names}, which no input set` } },
         effect: { kind: "none" },
       };
     }

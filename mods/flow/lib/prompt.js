@@ -41,10 +41,10 @@ export function buildAgentPrompt(run, nodeId, options) {
         throw new Error(`${node.label} is not an agent step`);
     const visit = run.status.kind === "executing" && run.status.node === node.id ? run.status.visit : (run.visits[node.id] ?? 0) + 1;
     const values = templateValues(run);
+    // The prompt is the agent's first message, so it opens with a sentence: a leading "#", "/" or "!"
+    // means something else to an agent's input box.
     const out = [
-        `# ${node.label}`,
-        "",
-        `You are one step of the Flow run "${machine.title}" (${run.id}). ` +
+        `You are the ${node.label} step of the Flow run "${machine.title}" (${run.id}). ` +
             `This is visit ${visit} of this step${node.maxVisits ? `, out of at most ${node.maxVisits}` : ""}. ` +
             `Work in ${run.folder}.`,
         "",
